@@ -1,0 +1,704 @@
+<meta charset="utf-8">
+<title>vLLM 中的 RoPE 与 KV Cache</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;900&display=swap">
+<style>
+:root {
+  --bg: #F3F5F8;
+  --surface: #FFFFFF;
+  --ink: #141A23;
+  --muted: #556072;
+  --line: #D8DEE6;
+  --code-bg: #ECEFF4;
+  --k: #2456D6;
+  --k-tint: #E2E9FB;
+  --v: #9E5C00;
+  --v-tint: #F6E9D6;
+  --rope: #B02A6C;
+  --rope-tint: #F7E5EE;
+  --busy: #E3E7ED;
+  --free: #F7F8FA;
+  --serif: "Noto Serif SC", "Songti SC", "STSong", serif;
+  --sans: "Noto Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0D1117;
+    --surface: #151B23;
+    --ink: #E6EAF0;
+    --muted: #9AA5B5;
+    --line: #2A333F;
+    --code-bg: #1A212B;
+    --k: #8AA8FF;
+    --k-tint: #1C2745;
+    --v: #EDAA4B;
+    --v-tint: #37280F;
+    --rope: #F37AB3;
+    --rope-tint: #36192A;
+    --busy: #222A35;
+    --free: #121820;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0D1117;
+  --surface: #151B23;
+  --ink: #E6EAF0;
+  --muted: #9AA5B5;
+  --line: #2A333F;
+  --code-bg: #1A212B;
+  --k: #8AA8FF;
+  --k-tint: #1C2745;
+  --v: #EDAA4B;
+  --v-tint: #37280F;
+  --rope: #F37AB3;
+  --rope-tint: #36192A;
+  --busy: #222A35;
+  --free: #121820;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.85;
+  letter-spacing: 0.01em;
+}
+.page {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding-inline: 20px;
+  padding-block: 40px 80px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 32px;
+}
+@media (min-width: 1000px) {
+  .page { grid-template-columns: 200px minmax(0, 1fr); gap: 56px; }
+  .toc { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 32px); align-self: start; }
+}
+article { max-width: 760px; min-width: 0; }
+
+h1, h2, h3 { text-wrap: balance; }
+h1 {
+  font-family: var(--serif);
+  font-weight: 900;
+  font-size: clamp(28px, 5vw, 42px);
+  line-height: 1.3;
+  margin: 8px 0 16px;
+}
+h2 {
+  font-family: var(--serif);
+  font-weight: 600;
+  font-size: 25px;
+  line-height: 1.4;
+  margin: 64px 0 12px;
+  scroll-margin-top: 24px;
+}
+h3 { font-size: 17px; font-weight: 700; margin: 32px 0 6px; }
+p { margin: 0 0 14px; }
+a { color: var(--k); }
+a:focus-visible, button:focus-visible, input:focus-visible { outline: 2px solid var(--rope); outline-offset: 2px; }
+.eyebrow {
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.lede { font-size: 17px; color: var(--muted); max-width: 62ch; }
+
+.toc { font-size: 14px; }
+.toc .eyebrow { display: block; margin-bottom: 8px; }
+.toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.toc a { color: var(--muted); text-decoration: none; }
+.toc a:hover { color: var(--ink); }
+@media (max-width: 999px) {
+  .toc { border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px; background: var(--surface); }
+  .toc ol { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 2px 16px; }
+}
+
+/* tokens for K / V / RoPE in running text */
+.t { font-family: var(--mono); font-size: 0.92em; padding: 0 4px; border-radius: 4px; white-space: nowrap; }
+.t.k { color: var(--k); background: var(--k-tint); }
+.t.v { color: var(--v); background: var(--v-tint); }
+.t.r { color: var(--rope); background: var(--rope-tint); }
+code { font-family: var(--mono); font-size: 0.88em; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+
+.answer {
+  margin-top: 28px;
+  background: var(--rope-tint);
+  border: 1px solid color-mix(in srgb, var(--rope) 35%, transparent);
+  border-radius: 14px;
+  padding: 22px 24px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px 28px;
+  align-items: start;
+}
+.answer .verdict { font-family: var(--serif); font-weight: 900; font-size: 44px; line-height: 1.1; color: var(--rope); }
+.answer .verdict small { display: block; font-family: var(--mono); font-weight: 400; font-size: 12px; letter-spacing: 0.06em; color: var(--muted); margin-top: 8px; }
+.answer ul { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; }
+@media (max-width: 560px) { .answer { grid-template-columns: 1fr; } }
+
+.code {
+  margin: 16px 0 20px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--code-bg);
+  overflow: hidden;
+}
+.code .path {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+.code pre { margin: 0; padding: 12px 14px; overflow-x: auto; font-family: var(--mono); font-size: 13px; line-height: 1.7; }
+.code pre code { background: none; padding: 0; font-size: inherit; overflow-wrap: normal; }
+.code .c { color: var(--muted); }
+.code .hl { background: var(--rope-tint); display: inline-block; min-width: 100%; }
+
+.figure { margin: 20px 0 8px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); padding: 16px; overflow-x: auto; }
+.figure svg { display: block; width: 100%; min-width: 680px; height: auto; }
+.caption { font-size: 13px; color: var(--muted); margin: 6px 0 20px; }
+
+.d-box { fill: var(--surface); stroke: var(--line); stroke-width: 1.5; }
+.d-rope { fill: var(--rope-tint); stroke: var(--rope); stroke-width: 1.5; }
+.d-group { fill: none; stroke: var(--line); stroke-width: 1.5; stroke-dasharray: 6 5; }
+.d-t { fill: var(--ink); font: 600 13px var(--mono); }
+.d-s { fill: var(--muted); font: 11px var(--mono); }
+.d-s10 { fill: var(--muted); font: 10px var(--mono); }
+.d-zh { fill: var(--ink); font: 700 13px var(--sans); }
+.d-note { font: 500 11px var(--sans); }
+.d-line { stroke: var(--muted); stroke-width: 1.5; fill: none; }
+.d-line.k { stroke: var(--k); }
+.d-line.v { stroke: var(--v); }
+.d-line.r { stroke: var(--rope); }
+.f-k { fill: var(--k); } .f-v { fill: var(--v); } .f-r { fill: var(--rope); } .f-m { fill: var(--muted); }
+.cell-k { fill: var(--k-tint); stroke: var(--k); stroke-width: 1; }
+.cell-v { fill: var(--v-tint); stroke: var(--v); stroke-width: 1; }
+
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin: 16px 0 8px; }
+.fact { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; background: var(--surface); }
+.fact b { display: block; font-family: var(--mono); font-size: 22px; font-variant-numeric: tabular-nums; }
+.fact span { font-size: 13px; color: var(--muted); line-height: 1.5; display: block; }
+
+/* explorer */
+.lab { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); padding: 16px; margin: 20px 0 8px; }
+.controls { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; margin-bottom: 14px; }
+.controls label { font-size: 14px; color: var(--muted); }
+.controls input[type=range] { width: min(260px, 100%); accent-color: var(--rope); }
+button {
+  font: 500 13px var(--sans);
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+button:hover:not(:disabled) { border-color: var(--muted); }
+button:disabled { opacity: 0.45; cursor: default; }
+.lab-grid { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 16px; }
+@media (max-width: 760px) { .lab-grid { grid-template-columns: 1fr; } }
+.pool { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 8px; }
+.blk { border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px 8px; font: 11px/1.4 var(--mono); background: var(--surface); }
+.blk.busy { background: repeating-linear-gradient(135deg, var(--busy) 0 5px, var(--surface) 5px 10px); color: var(--muted); }
+.blk.free { background: var(--free); color: var(--muted); }
+.blk.cur { border-color: var(--rope); box-shadow: 0 0 0 1px var(--rope); }
+.bh { display: flex; justify-content: space-between; gap: 6px; margin-bottom: 4px; }
+.bh span { color: var(--muted); }
+.blk.mine .bh span { color: var(--rope); }
+.slot { display: grid; grid-template-columns: 10px 1fr 1fr 30px; gap: 4px; align-items: center; height: 18px; border-radius: 3px; }
+.slot .o { color: var(--muted); }
+.slot .p { text-align: right; font-variant-numeric: tabular-nums; }
+.hd { display: flex; gap: 1px; }
+.hd i { flex: 1; height: 10px; border-radius: 2px; background: var(--busy); }
+.blk.free .hd i, .blk.mine .slot:not(.filled) .hd i { background: transparent; outline: 1px dashed var(--line); outline-offset: -1px; }
+.slot.filled { cursor: pointer; }
+.slot.filled .hd i.k { background: var(--k-tint); outline: 1px solid var(--k); outline-offset: -1px; }
+.slot.filled .hd i.v { background: var(--v-tint); outline: 1px solid var(--v); outline-offset: -1px; }
+.slot.sel { background: var(--rope-tint); }
+.slot.sel .hd i.k { background: var(--k); }
+.slot.sel .hd i.v { background: var(--v); }
+.calc { font-size: 13px; display: grid; gap: 2px; align-content: start; }
+.calc .row { display: flex; justify-content: space-between; gap: 12px; border-bottom: 1px dashed var(--line); padding: 3px 0; }
+.calc .row span:first-child { color: var(--muted); }
+.calc .row span:last-child { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.calc .write { margin-top: 10px; font-family: var(--mono); font-size: 12px; line-height: 1.7; background: var(--code-bg); border-radius: 8px; padding: 8px 10px; overflow-x: auto; white-space: nowrap; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); margin-top: 12px; }
+.legend i { display: inline-block; width: 12px; height: 10px; border-radius: 2px; vertical-align: -1px; margin-right: 5px; }
+
+/* rope demo */
+.rope-grid { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 20px; align-items: center; }
+@media (max-width: 640px) { .rope-grid { grid-template-columns: 1fr; } .rope-grid svg { max-width: 280px; margin: 0 auto; } }
+.rope-grid svg { width: 100%; height: auto; display: block; }
+.ring { fill: none; stroke: var(--line); stroke-width: 1; }
+.axis { stroke: var(--line); stroke-width: 1; }
+.vec { stroke-width: 2.5; stroke-linecap: round; }
+.vec.q { stroke: var(--ink); }
+.vec.k { stroke: var(--k); }
+.vec.ghost { stroke-width: 1.5; stroke-dasharray: 4 4; opacity: 0.6; }
+.arc { fill: none; stroke: var(--rope); stroke-width: 2; }
+.lbl { font: 600 13px var(--mono); }
+.readout { display: grid; gap: 10px; }
+.readout .ctl { display: grid; grid-template-columns: 110px minmax(0, 1fr) 32px; gap: 10px; align-items: center; font-size: 14px; }
+.readout .ctl output { font-family: var(--mono); text-align: right; font-variant-numeric: tabular-nums; }
+.readout input[type=range] { width: 100%; accent-color: var(--rope); }
+.score { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.score b { font-family: var(--mono); font-size: 30px; font-variant-numeric: tabular-nums; }
+.score span { color: var(--muted); font-size: 13px; }
+
+.formula { font-family: var(--mono); font-size: 15px; background: var(--code-bg); border-radius: 8px; padding: 12px 14px; margin: 12px 0 16px; overflow-x: auto; white-space: nowrap; }
+
+.table-wrap { overflow-x: auto; margin: 16px 0; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; line-height: 1.6; }
+th, td { text-align: left; vertical-align: top; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+tr:last-child td { border-bottom: 0; }
+th { font-weight: 700; font-size: 13px; color: var(--muted); background: var(--bg); }
+td code { white-space: nowrap; }
+.idx td:first-child { font-family: var(--mono); font-size: 12px; white-space: nowrap; }
+
+.list { padding-left: 1.2em; display: grid; gap: 10px; margin: 8px 0 16px; }
+.list li::marker { color: var(--muted); }
+.note { font-size: 14px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 16px; margin-top: 56px; }
+
+</style>
+
+<div class="page">
+  <nav class="toc" aria-label="目录">
+    <span class="eyebrow">目录</span>
+    <ol>
+      <li><a href="#answer">结论</a></li>
+      <li><a href="#model">模型代码里的顺序</a></li>
+      <li><a href="#attn">Attention 层内部</a></li>
+      <li><a href="#layout">KV cache 内存布局</a></li>
+      <li><a href="#slot">slot_mapping</a></li>
+      <li><a href="#why">为什么存旋转后的 K</a></li>
+      <li><a href="#impact">带来的影响</a></li>
+      <li><a href="#variants">变体与特例</a></li>
+      <li><a href="#index">代码索引</a></li>
+    </ol>
+  </nav>
+
+  <article>
+    <span class="eyebrow">vLLM 源码导读 · 第 1 讲</span>
+    <h1>全注意力 + RoPE 模型：KV cache 怎么存，K 是旋转前还是旋转后？</h1>
+    <p class="lede">以 Llama 这类标准 MHA / GQA 模型为例，沿着一次前向计算，从 <code>rotary_emb</code> 一直追到把 K、V 写进显存的 CUDA kernel。</p>
+
+    <section class="answer" id="answer" aria-label="结论">
+      <div class="verdict">旋转后<small>POST-RoPE K</small></div>
+      <ul>
+        <li>模型在调用 <code>self.attn(q, k, v)</code> <b>之前</b>就对 q、k 施加了 RoPE，所以 Attention 层拿到、并写进 cache 的是 <span class="t r">k′ = RoPE(k, pos)</span>。<span class="t v">v</span> 不做位置编码，原样写入。</li>
+        <li>每个 token 的 K 只旋转一次：在它被算出来的那一步，用它自己的绝对位置旋转，然后写入 cache。之后的每一步 decode 都直接读，不会再旋转。</li>
+        <li>cache 是分页的（PagedAttention）：每层一个逻辑张量 <code>[B, H, N, C]</code>，即「块 × KV head × 块内 token × 内容」，其中内容维 C 把同一个 token、同一个 head 的 <span class="t k">K</span> 和 <span class="t v">V</span> 拼在一起。token 写到哪一格由 <code>slot_mapping</code> 决定。</li>
+      </ul>
+    </section>
+
+    <h2 id="model">模型代码里的顺序</h2>
+    <p>先看模型定义。vLLM 里几乎所有使用 RoPE 的全注意力模型都遵循同一个模式，Llama 是最典型的（代码里的中文注释是教程加的，下同）：</p>
+    <div class="code">
+      <div class="path">vllm/model_executor/models/llama.py · LlamaAttention.forward（第 224–234 行，节选）</div>
+<pre><code>def forward(self, positions, hidden_states):
+    qkv, _ = self.qkv_proj(hidden_states)
+    q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
+<span class="hl">    q, k = self.rotary_emb(positions, q, k)   <span class="c"># RoPE 发生在这里</span></span>
+<span class="hl">    attn_output = self.attn(q, k, v)           <span class="c"># 传进去的已经是旋转后的 q、k</span></span>
+    output, _ = self.o_proj(attn_output)
+    return output</code></pre>
+    </div>
+    <p>这里的 <code>positions</code> 是每个 token 在自己序列里的<b>绝对位置</b>（第 0、1、2… 个 token）。<code>rotary_emb</code> 在 CUDA 上走的是原地（in-place）kernel <code>ops.rotary_embedding</code>，直接改写 q、k 的显存（见 <code>rotary_embedding/base.py</code> 第 242 行的注释）。所以从 <code>self.attn</code> 往后，已经不存在「未旋转的 K」了。</p>
+
+    <div class="figure" role="img" aria-label="数据流图：hidden_states 经过 qkv_proj、split 后，q 和 k 进入 rotary_emb，v 绕过 RoPE；三者进入 self.attn。Attention 内部先用 reshape_and_cache_flash 按 slot_mapping 写入分页 KV cache，再由 attention kernel 按 block_table 读取 cache 计算注意力。">
+      <svg viewBox="0 0 800 330" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" class="f-m"/></marker>
+          <marker id="ahv" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" class="f-v"/></marker>
+          <marker id="ahr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" class="f-r"/></marker>
+        </defs>
+
+        <rect x="16" y="40" width="120" height="52" rx="8" class="d-box"/>
+        <text x="76" y="71" text-anchor="middle" class="d-t">hidden_states</text>
+        <rect x="166" y="40" width="112" height="52" rx="8" class="d-box"/>
+        <text x="222" y="71" text-anchor="middle" class="d-t">qkv_proj</text>
+        <rect x="308" y="40" width="96" height="52" rx="8" class="d-box"/>
+        <text x="356" y="63" text-anchor="middle" class="d-t">split</text>
+        <text x="356" y="81" text-anchor="middle" class="d-s">q · k · v</text>
+        <rect x="436" y="40" width="170" height="52" rx="8" class="d-rope"/>
+        <text x="521" y="63" text-anchor="middle" class="d-t f-r">rotary_emb</text>
+        <text x="521" y="81" text-anchor="middle" class="d-s">(positions, q, k)</text>
+        <rect x="634" y="40" width="150" height="52" rx="8" class="d-box"/>
+        <text x="709" y="63" text-anchor="middle" class="d-t">self.attn</text>
+        <text x="709" y="81" text-anchor="middle" class="d-s">(q′, k′, v)</text>
+
+        <path d="M136,66 H164" class="d-line" marker-end="url(#ah)"/>
+        <path d="M278,66 H306" class="d-line" marker-end="url(#ah)"/>
+        <path d="M404,66 H434" class="d-line" marker-end="url(#ah)"/>
+        <text x="420" y="30" text-anchor="middle" class="d-s">q, k</text>
+        <path d="M606,66 H632" class="d-line r" marker-end="url(#ahr)"/>
+        <text x="620" y="30" text-anchor="middle" class="d-s f-r">q′, k′</text>
+
+        <path d="M356,92 V118 H680 V94" class="d-line v" marker-end="url(#ahv)"/>
+        <text x="518" y="111" text-anchor="middle" class="d-note f-v">v 不经过 RoPE，原样传入</text>
+
+        <rect x="16" y="140" width="768" height="176" rx="12" class="d-group"/>
+        <text x="32" y="304" class="d-s">Attention.forward（每一层都执行一次）</text>
+
+        <path d="M740,92 V160 H130 V194" class="d-line" marker-end="url(#ah)"/>
+        <text x="440" y="154" text-anchor="middle" class="d-s">k′, v</text>
+        <path d="M740,160 V194" class="d-line r" marker-end="url(#ahr)"/>
+        <text x="750" y="184" class="d-s f-r">q′</text>
+
+        <rect x="32" y="196" width="196" height="56" rx="8" class="d-box"/>
+        <text x="130" y="219" text-anchor="middle" class="d-zh">① 写入 KV cache</text>
+        <text x="130" y="238" text-anchor="middle" class="d-s">reshape_and_cache_flash</text>
+
+        <rect x="302" y="176" width="180" height="124" rx="8" class="d-box"/>
+        <text x="392" y="197" text-anchor="middle" class="d-zh">KV cache（分页）</text>
+        <g>
+          <rect x="309" y="208" width="24" height="12" rx="2" class="cell-k"/><rect x="335" y="208" width="24" height="12" rx="2" class="cell-v"/>
+          <rect x="309" y="224" width="24" height="12" rx="2" class="cell-k"/><rect x="335" y="224" width="24" height="12" rx="2" class="cell-v"/>
+          <rect x="309" y="240" width="24" height="12" rx="2" class="cell-k"/><rect x="335" y="240" width="24" height="12" rx="2" class="cell-v"/>
+          <rect x="309" y="256" width="24" height="12" rx="2" class="cell-k"/><rect x="335" y="256" width="24" height="12" rx="2" class="cell-v"/>
+          <rect x="367" y="208" width="24" height="12" rx="2" class="cell-k"/><rect x="393" y="208" width="24" height="12" rx="2" class="cell-v"/>
+          <rect x="367" y="224" width="24" height="12" rx="2" class="cell-k"/><rect x="393" y="224" width="24" height="12" rx="2" class="cell-v"/>
+          <rect x="367" y="240" width="24" height="12" rx="2" class="cell-k"/><rect x="393" y="240" width="24" height="12" rx="2" class="cell-v"/>
+          <rect x="367" y="256" width="24" height="12" rx="2" class="cell-k"/><rect x="393" y="256" width="24" height="12" rx="2" class="cell-v"/>
+          <rect x="425" y="208" width="24" height="12" rx="2" class="cell-k"/><rect x="451" y="208" width="24" height="12" rx="2" class="cell-v"/>
+          <rect x="425" y="224" width="24" height="12" rx="2" class="cell-k"/><rect x="451" y="224" width="24" height="12" rx="2" class="cell-v"/>
+        </g>
+        <text x="392" y="289" text-anchor="middle" class="d-s">[块, token, head, K‖V]</text>
+
+        <path d="M228,224 H300" class="d-line" marker-end="url(#ah)"/>
+        <text x="265" y="216" text-anchor="middle" class="d-s10">slot_mapping</text>
+
+        <rect x="560" y="196" width="208" height="56" rx="8" class="d-box"/>
+        <text x="664" y="219" text-anchor="middle" class="d-zh">② 计算注意力</text>
+        <text x="664" y="238" text-anchor="middle" class="d-s">flash_attn_varlen_func</text>
+        <path d="M482,224 H558" class="d-line" marker-end="url(#ah)"/>
+        <text x="520" y="216" text-anchor="middle" class="d-s10">block_table</text>
+      </svg>
+    </div>
+    <p class="caption">一次前向中单层的数据流。q′、k′ 表示已旋转。cache 里只存 k′ 和 v，q′ 用完即丢。</p>
+
+    <h2 id="attn">Attention 层内部：先写 cache，再算注意力</h2>
+    <p><code>Attention.forward</code> 把 k′、v reshape 成 <code>[num_tokens, num_kv_heads, head_size]</code>，然后分两步：</p>
+    <div class="code">
+      <div class="path">vllm/model_executor/layers/attention/attention.py · Attention.forward（第 488 行起，节选）</div>
+<pre><code>key = key.view(-1, self.num_kv_heads, self.head_size)
+value = value.view(-1, self.num_kv_heads, self.head_size_v)
+...
+<span class="hl">kv_cache_dummy_dep = torch.ops.vllm.unified_kv_cache_update(key, value, encoded)</span>
+torch.ops.vllm.unified_attention_with_output(
+    query, key, value, output, encoded,
+    kv_cache_dummy_dep=kv_cache_dummy_dep,   <span class="c"># 保证 torch.compile 下「先写后读」</span>
+)</code></pre>
+    </div>
+    <p><code>unified_kv_cache_update</code> 会调用当前后端的 <code>impl.do_kv_cache_update</code>。以 FlashAttention 后端为例：</p>
+    <div class="code">
+      <div class="path">vllm/v1/attention/backends/flash_attn.py · FlashAttentionImpl.do_kv_cache_update（第 1510 行起，节选）</div>
+<pre><code><span class="c"># (B, H, N, 2*D) -> ((B, N, H, D), (B, N, H, D))</span>
+key_cache, value_cache = kv_cache.transpose(1, 2).split(self.head_size, dim=-1)
+<span class="hl">reshape_and_cache_flash(</span>
+<span class="hl">    key, value, key_cache, value_cache, slot_mapping,</span>
+<span class="hl">    self.kv_cache_dtype, layer._k_scale, layer._v_scale,</span>
+<span class="hl">)</span></code></pre>
+    </div>
+    <p><code>reshape_and_cache_flash</code> 是一个纯粹的「按地址搬运」kernel：它根据 <code>slot_mapping</code> 算出每个 token 在 cache 里的位置，把 k′、v 拷贝过去。如果 KV cache 是 fp8，它会顺便乘上 <code>k_scale</code> / <code>v_scale</code> 做量化。<b>它不做任何旋转</b>。</p>
+    <p>写完之后，<code>forward</code> 再调用 <code>flash_attn_varlen_func</code>，传入的是 <b>cache</b>（<code>k=key_cache, v=value_cache</code>）和 <code>block_table</code>，而不是刚算出来的 k、v。也就是说，在 v1 的 FlashAttention 后端里，prefill 和 decode 通常都从分页 cache 里读 K/V。kernel 拿到的 q′ 和 cache 中的 k′ 都已旋转，直接做点积就是带 RoPE 的注意力分数。</p>
+    <p>还有一些后端的 <code>forward_includes_kv_cache_update = True</code>，会在 <code>forward</code> 内部自己完成写入，但写进去的内容相同，都是 k′ 和 v。</p>
+
+    <h2 id="layout">KV cache 的内存布局</h2>
+    <p>每个注意力层的 cache 规格由 <code>AttentionSpec</code> 描述：<code>block_size</code>（每块多少 token，默认 16，个别后端会调大）、<code>num_kv_heads</code>、<code>head_size</code>、<code>head_size_v</code> 和 <code>dtype</code>。其中决定「每格多大」的是：</p>
+    <div class="code">
+      <div class="path">vllm/v1/kv_cache_interface.py · AttentionSpec.state_content_size_bytes（第 513 行）</div>
+<pre><code>@property
+def state_content_size_bytes(self) -> int:
+    """Bytes per (head slot, stored state) cell of the page."""
+    if self.state_content_bytes is not None:
+        return self.state_content_bytes
+<span class="hl">    return (self.head_size + self.head_size_v) * get_dtype_size(self.dtype)</span></code></pre>
+    </div>
+    <p>也就是说，一个「格子」对应 <b>一个 token × 一个 KV head</b>，里面先放 <span class="t k">K（head_size 个数）</span>，紧接着放 <span class="t v">V（head_size_v 个数）</span>。</p>
+    <p>整个 cache 的逻辑形状是 5 维 <code>[L, B, H, N, C]</code>：层、块、KV head、块内 token、内容（字节）。物理上按什么顺序排由 <code>KVCacheLayout</code>（<code>vllm/v1/kv_cache_layout.py</code>）决定。FlashAttention 后端没有声明偏好，于是用默认的 <code>LBNHC</code>（即过去常说的 <b>NHD</b> 布局）：每层独立一段显存，块内按「token → head → K‖V」连续排列。每层拿到的是一个 4 维视图 <code>[B, H, N, C]</code>，写入和读取前各做一次 <code>transpose(1, 2).split(head_size)</code>，得到两个 <code>[B, N, H, D]</code> 的 strided 视图 <code>key_cache</code> 和 <code>value_cache</code>。</p>
+
+    <h3>算一笔账：Llama-3-8B（bf16，block_size = 16，单卡）</h3>
+    <div class="facts">
+      <div class="fact"><b>4 KiB</b><span>每 token 每层：8 个 KV head × (128 + 128) × 2 B</span></div>
+      <div class="fact"><b>64 KiB</b><span>每块每层（一页）：16 token × 4 KiB</span></div>
+      <div class="fact"><b>128 KiB</b><span>每 token 全模型：32 层 × 4 KiB</span></div>
+      <div class="fact"><b>1 GiB</b><span>一条 8192 token 的序列占用的 KV cache</span></div>
+    </div>
+    <p>用张量并行（TP）时，每张卡只存自己那一份 KV head（TP=2 时每卡 4 个），上面的数字相应减半。</p>
+
+    <h2 id="slot">slot_mapping：每个 token 写到哪一格</h2>
+    <p>调度器给每个请求分配若干物理块，记在 <code>block_table</code> 里（请求的第 i 个逻辑块 → 第几号物理块）。每一步前向前，worker 用 token 的位置算出它的 slot：</p>
+    <div class="code">
+      <div class="path">vllm/v1/worker/block_table.py · ComputeSlotMappingKernel（第 475–476 行）</div>
+<pre><code>slot_offsets = local_block_offsets % block_size
+<span class="hl">slot_ids = block_numbers * block_size + slot_offsets</span></code></pre>
+    </div>
+    <p>CUDA kernel 再把 slot 拆回「物理块号 + 块内偏移」：</p>
+    <div class="code">
+      <div class="path">csrc/libtorch_stable/cache_kernels.cu · reshape_and_cache_flash_kernel（第 326 行起，节选）</div>
+<pre><code>const int64_t slot_idx = slot_mapping[token_idx];
+if (slot_idx &lt; 0) { return; }                  <span class="c">// padding 出来的 token 不写</span>
+const int64_t block_idx = slot_idx / block_size;
+const int64_t block_offset = slot_idx % block_size;
+cache_t* key_dst =
+    key_cache + block_idx * block_stride + block_offset * page_stride;
+<span class="c">// 之后逐 head 拷贝；fp8 cache 时乘以 k_scale / v_scale</span></code></pre>
+    </div>
+
+    <p>下面用一个缩小版的例子把这些连起来：block_size = 4，2 个 KV head，显存里一共 12 个物理块（只画一层）。一个请求已有 10 个 token，<code>block_table = [7, 2, 9]</code>。拖动滑块或点击任意有数据的格子，看这个 token 的 k′、v 落在哪里。点「decode 一步」模拟生成一个新 token：只有新 token 的一格被写入，已有的格子不变；当前块写满时，会从空闲块里再分配一块。</p>
+
+    <div class="lab">
+      <div class="controls">
+        <label for="pos">token 位置 p</label>
+        <input type="range" id="pos" min="0" max="9" value="5">
+        <button type="button" id="step">decode 一步（+1 token）</button>
+        <button type="button" id="reset">重置</button>
+      </div>
+      <div class="lab-grid">
+        <div class="pool" id="pool" aria-live="polite"></div>
+        <div class="calc">
+          <div class="row"><span>block_table</span><span id="c-table">[7, 2, 9]</span></div>
+          <div class="row"><span>token 位置 p</span><span id="c-p">5</span></div>
+          <div class="row"><span>逻辑块 = p // 4</span><span id="c-lb">1</span></div>
+          <div class="row"><span>块内偏移 = p % 4</span><span id="c-off">1</span></div>
+          <div class="row"><span>物理块 = block_table[<span id="c-lb2">1</span>]</span><span id="c-pb">2</span></div>
+          <div class="row"><span>slot = 物理块 × 4 + 偏移</span><span id="c-slot">9</span></div>
+          <div class="write" id="c-write"></div>
+        </div>
+      </div>
+      <div class="legend">
+        <span><i style="background:var(--k-tint);outline:1px solid var(--k)"></i>K 部分（存 k′，已按 p 旋转）</span>
+        <span><i style="background:var(--v-tint);outline:1px solid var(--v)"></i>V 部分</span>
+        <span><i style="background:repeating-linear-gradient(135deg,var(--busy) 0 3px,var(--surface) 3px 6px);outline:1px solid var(--line)"></i>其他请求占用</span>
+        <span><i style="background:var(--free);outline:1px dashed var(--line)"></i>空闲</span>
+      </div>
+    </div>
+    <p class="caption">每个块内一行是一个 token 槽位，每行两组小方块分别是 head 0 和 head 1，每组左 K 右 V。真实配置里 block_size 通常是 16，head 数和块数也多得多。</p>
+
+    <h2 id="why">为什么存旋转后的 K</h2>
+    <p>RoPE 把向量按维度两两分组，每组看作一个二维平面，位置 m 的向量在第 i 个平面上旋转角度 m·θ<sub>i</sub>（θ<sub>i</sub> = base<sup>−2i/d</sup>，Llama 2 的 base 是 10000，Llama 3 是 500000）。设 R<sub>m</sub> 为旋转矩阵，因为旋转矩阵正交且可交换：</p>
+    <div class="formula">⟨R<sub>m</sub>q, R<sub>n</sub>k⟩ = q<sup>⊤</sup>R<sub>m</sub><sup>⊤</sup>R<sub>n</sub>k = q<sup>⊤</sup>R<sub>n−m</sub>k</div>
+    <p>注意力分数只取决于相对距离 n − m。关键在于左边这个形式：<b>k 的旋转只依赖 k 自己的位置 n</b>，与之后哪个 query 来读它无关。一个 token 的位置一旦确定就不会改变，所以在写入时旋转一次，之后所有 query 都能直接用，结果和每次现算完全一样。</p>
+
+    <div class="lab">
+      <div class="rope-grid">
+        <svg viewBox="0 0 280 280" role="img" aria-label="单个频率平面上的 RoPE 旋转：q 按位置 m 旋转，k 按位置 n 旋转，两者夹角只取决于 m − n。">
+          <line x1="20" y1="140" x2="260" y2="140" class="axis"/>
+          <line x1="140" y1="20" x2="140" y2="260" class="axis"/>
+          <circle cx="140" cy="140" r="100" class="ring"/>
+          <line id="q0" x1="140" y1="140" x2="240" y2="140" class="vec q ghost"/>
+          <line id="k0" x1="140" y1="140" x2="140" y2="140" class="vec k ghost"/>
+          <path id="arc" class="arc" d=""/>
+          <line id="qv" x1="140" y1="140" x2="140" y2="140" class="vec q"/>
+          <line id="kv" x1="140" y1="140" x2="140" y2="140" class="vec k"/>
+          <text id="ql" class="lbl" style="fill:var(--ink)" text-anchor="middle">q′</text>
+          <text id="kl" class="lbl" style="fill:var(--k)" text-anchor="middle">k′</text>
+        </svg>
+        <div class="readout">
+          <div class="ctl"><label for="m">query 位置 m</label><input type="range" id="m" min="0" max="24" value="6"><output id="mo" for="m">6</output></div>
+          <div class="ctl"><label for="n">key 位置 n</label><input type="range" id="n" min="0" max="24" value="2"><output id="no" for="n">2</output></div>
+          <div class="score"><b id="sc">0.000</b><span>分数 ⟨q′, k′⟩，相对距离 m − n = <span id="rel">4</span></span></div>
+          <div><button type="button" id="shift">m 和 n 同时 +1</button></div>
+          <p class="caption" style="margin:0">虚线是旋转前的 q、k，实线是旋转后的 q′、k′（示意：单个频率，θ = 0.4 rad）。只拖动 m 时 k′ 不动，因为 key 的旋转只由它自己的位置 n 决定；m 和 n 一起平移时分数不变。因果注意力下 n ≤ m，所以 n 不会超过 m。</p>
+        </div>
+      </div>
+    </div>
+
+    <p>反过来，如果 cache 存的是未旋转的 K，会是什么样？</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th></th><th>存旋转后的 K（vLLM 的做法）</th><th>存旋转前的 K</th></tr></thead>
+        <tbody>
+          <tr><td>每个 K 旋转几次</td><td>写入时 1 次</td><td>每一步 decode 都要把整段历史 K 再转一遍，额外开销随序列长度线性增长</td></tr>
+          <tr><td>注意力 kernel</td><td>直接使用 FlashAttention / FlashInfer 等标准 kernel</td><td>需要在 kernel 内读出 K 后按位置旋转，要定制 kernel</td></tr>
+          <tr><td>前缀缓存</td><td>同一前缀出现在同一位置时可复用</td><td>理论上同一段文本放在不同位置也能复用</td></tr>
+          <tr><td>改动 token 的位置</td><td>必须重算（或先做逆旋转）</td><td>只需改 position</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>对推理引擎来说，前两行是每一步都要付出的代价，后两行只在少数场景里有用，所以 vLLM 和主流推理框架都选择存旋转后的 K。</p>
+
+    <h2 id="impact">这个设计带来的影响</h2>
+    <ul class="list">
+      <li><b>前缀缓存可以直接复用。</b>块哈希由「父块哈希 + 本块 token ids + 额外键（LoRA、多模态等）」算出（<code>kv_cache_utils.py</code> 的 <code>hash_block_tokens</code>）。父块哈希形成一条链，隐含了「这个块从第几个 token 开始」，所以一旦命中，这些 token 的位置必然相同，缓存里的 k′ 也完全一致。反过来，同一段文字出现在不同偏移处就无法命中。</li>
+      <li><b>已缓存 token 的位置不能随意平移。</b>像 StreamingLLM 那种丢掉中间 token、把后面 token 的位置往前挪的做法，需要对 k′ 先逆旋转再按新位置旋转。vLLM 的 cache 里没有未旋转的 K，要改位置只能重新计算这些 token。</li>
+      <li><b>fp8 KV cache 量化的是 k′。</b><code>reshape_and_cache_flash</code> 在写入时用 <code>k_scale</code> 把 k′ 转成 fp8，量化误差作用在旋转后的值上。</li>
+      <li><b>RoPE 和写 cache 可以融合成一个 kernel。</b>torch.compile 的 <code>RopeKVCacheFusionPass</code>（开关 <code>fuse_rope_kvcache</code>）把 <code>rotary_embedding</code> 和 <code>unified_kv_cache_update</code> 合并，由后端的 <code>do_rope_and_kv_cache_update</code> 一次完成；Qwen3 这类带 QK-Norm 的模型还有 QK-Norm + RoPE + 写 cache 三合一的版本。目前只在开启 ROCm AITER 的后端上生效。融合只省掉一次显存读写，写进去的仍然是 k′。</li>
+    </ul>
+
+    <h2 id="variants">变体与特例</h2>
+    <h3>部分旋转（partial rotary）</h3>
+    <p>GPT-NeoX、Phi-2、StableLM 等模型的 <code>rotary_dim</code> 小于 <code>head_size</code>，只有前 <code>rotary_dim</code> 维被旋转，其余维度保持原样。cache 里的 K 仍然是「RoPE 处理之后」的整个向量，只不过其中一部分维度没有被转。</p>
+    <h3>M-RoPE（Qwen2-VL / Qwen2.5-VL 等多模态模型）</h3>
+    <p><code>positions</code> 变成形状 <code>[3, num_tokens]</code> 的（时间、高、宽）三维位置，不同频率段用不同的位置分量。它同样在 <code>self.attn</code> 之前施加，cache 里存的依然是旋转后的 K。</p>
+    <h3>MLA（DeepSeek-V2 / V3）：解耦 RoPE</h3>
+    <p>MLA 不是「全 KV」存储，但正好可以对照。它的 cache 每个 token 只存一行：<b>压缩后的潜向量</b> <code>kv_c_normed</code>（<code>kv_lora_rank</code> = 512 维，不带位置信息）拼上 <b>单独的 RoPE 部分</b> <code>k_pe</code>（64 维），一共 576 维，所有 head 共享。</p>
+    <div class="code">
+      <div class="path">vllm/model_executor/layers/mla.py（第 227–230 行）</div>
+<pre><code>if self.rotary_emb is not None:
+<span class="hl">    q[..., self.qk_nope_head_dim :], k_pe = self.rotary_emb(</span>
+<span class="hl">        positions, q[..., self.qk_nope_head_dim :], k_pe</span>
+<span class="hl">    )</span></code></pre>
+    </div>
+    <p>写入时 <code>concat_and_cache_mla</code> 把 <code>kv_c_normed</code> 和已旋转的 <code>k_pe</code> 拼在一起存进 <code>[num_blocks, block_size, 576]</code>。MLA 之所以把 RoPE 单独拆出来，是因为潜向量要和 up-projection 矩阵做「矩阵吸收」，只有不带位置信息才能吸收。结论不变：凡是带 RoPE 的那部分 K，vLLM 都存旋转后的值。</p>
+
+    <h2 id="index">代码索引</h2>
+    <div class="table-wrap">
+      <table class="idx">
+        <thead><tr><th>位置</th><th>作用</th></tr></thead>
+        <tbody>
+          <tr><td>vllm/model_executor/models/llama.py:231</td><td>在 <code>self.attn</code> 之前对 q、k 施加 RoPE</td></tr>
+          <tr><td>vllm/model_executor/layers/rotary_embedding/base.py:242</td><td>CUDA 路径用原地 kernel 旋转 q、k</td></tr>
+          <tr><td>vllm/model_executor/layers/attention/attention.py:488</td><td><code>Attention.forward</code>：先写 cache，再算注意力</td></tr>
+          <tr><td>vllm/model_executor/layers/attention/attention.py:724</td><td><code>unified_kv_cache_update</code> → <code>impl.do_kv_cache_update</code></td></tr>
+          <tr><td>vllm/v1/attention/backends/flash_attn.py:1510</td><td>FlashAttention 后端的写 cache 入口</td></tr>
+          <tr><td>csrc/libtorch_stable/cache_kernels.cu:326</td><td><code>reshape_and_cache_flash_kernel</code>：按 slot 拷贝 K/V</td></tr>
+          <tr><td>vllm/v1/worker/block_table.py:476</td><td>slot = 物理块号 × block_size + 块内偏移</td></tr>
+          <tr><td>vllm/v1/kv_cache_interface.py:513</td><td>每格字节数 = (head_size + head_size_v) × dtype 大小</td></tr>
+          <tr><td>vllm/v1/kv_cache_layout.py:15</td><td><code>KVCacheLayout</code>：<code>[L, B, H, N, C]</code> 的物理排列</td></tr>
+          <tr><td>vllm/v1/attention/backends/utils.py:188</td><td>默认布局偏好，<code>LBNHC</code>（NHD）优先</td></tr>
+          <tr><td>vllm/config/cache.py:71</td><td><code>DEFAULT_BLOCK_SIZE = 16</code></td></tr>
+          <tr><td>vllm/v1/core/kv_cache_utils.py:650</td><td>前缀缓存的块哈希 <code>hash_block_tokens</code></td></tr>
+          <tr><td>vllm/compilation/passes/fusion/rope_kvcache_fusion.py:46</td><td>RoPE 与写 cache 的融合</td></tr>
+          <tr><td>vllm/model_executor/layers/mla.py:228</td><td>MLA 只对 <code>k_pe</code> 施加 RoPE</td></tr>
+          <tr><td>vllm/v1/attention/backend.py:1072</td><td>MLA 写 cache：<code>concat_and_cache_mla</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="note">基于本仓库 commit 8a23646 编写，行号会随上游代码变化。可以接着问的问题：<code>block_table</code> 里的物理块是谁分配、何时回收的（KVCacheManager 与 BlockPool）？前缀缓存命中后，调度器如何跳过这部分 prefill？滑动窗口层的 cache 又是怎么管理的？</p>
+  </article>
+</div>
+
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+
+  // Paged KV cache explorer
+  const BS = 4, NBLK = 12, MAXTOK = 16;
+  const BUSY = new Set([0, 1, 4, 5, 10]);
+  const INIT_TABLE = [7, 2, 9], INIT_FREE = [3, 6, 8, 11];
+  let table, free, len, sel;
+  const pool = $('pool'), pos = $('pos');
+
+  function render() {
+    const curLb = Math.floor(sel / BS);
+    let html = '';
+    for (let b = 0; b < NBLK; b++) {
+      const lb = table.indexOf(b);
+      const kind = lb >= 0 ? 'mine' : (BUSY.has(b) ? 'busy' : 'free');
+      const tag = lb >= 0 ? '逻辑块 ' + lb : (kind === 'busy' ? '其他请求' : '空闲');
+      let rows = '';
+      for (let o = 0; o < BS; o++) {
+        const p = lb >= 0 ? lb * BS + o : -1;
+        const filled = lb >= 0 && p < len;
+        const cls = 'slot' + (filled ? ' filled' : '') + (filled && p === sel ? ' sel' : '');
+        const heads = '<span class="hd"><i class="k"></i><i class="v"></i></span>'.repeat(2);
+        rows += '<div class="' + cls + '"' + (filled ? ' data-p="' + p + '"' : '') + '>' +
+          '<span class="o">' + o + '</span>' + heads +
+          '<span class="p">' + (filled ? 'p=' + p : '') + '</span></div>';
+      }
+      html += '<div class="blk ' + kind + (lb >= 0 && lb === curLb ? ' cur' : '') + '">' +
+        '<div class="bh"><b>block ' + b + '</b><span>' + tag + '</span></div>' + rows + '</div>';
+    }
+    pool.innerHTML = html;
+
+    pos.max = String(len - 1);
+    pos.value = String(sel);
+    const off = sel % BS, pb = table[curLb], slot = pb * BS + off;
+    $('c-table').textContent = '[' + table.join(', ') + ']';
+    $('c-p').textContent = sel;
+    $('c-lb').textContent = curLb;
+    $('c-lb2').textContent = curLb;
+    $('c-off').textContent = off;
+    $('c-pb').textContent = pb;
+    $('c-slot').textContent = pb + ' × 4 + ' + off + ' = ' + slot;
+    $('c-write').innerHTML =
+      'kv_cache[l][' + pb + ', h, ' + off + ', :D] ← <span style="color:var(--k)">k′ = RoPE(k, ' + sel + ')</span><br>' +
+      'kv_cache[l][' + pb + ', h, ' + off + ', D:] ← <span style="color:var(--v)">v</span>';
+    $('step').disabled = len >= MAXTOK;
+  }
+
+  function reset() {
+    table = INIT_TABLE.slice();
+    free = INIT_FREE.slice();
+    len = 10;
+    sel = 5;
+    render();
+  }
+
+  function step() {
+    if (len >= MAXTOK) return;
+    if (len % BS === 0) {
+      if (!free.length) return;
+      table.push(free.shift());
+    }
+    len++;
+    sel = len - 1;
+    render();
+  }
+
+  pos.addEventListener('input', () => { sel = +pos.value; render(); });
+  pool.addEventListener('click', (e) => {
+    const s = e.target.closest('.slot.filled');
+    if (s) { sel = +s.dataset.p; render(); }
+  });
+  $('step').addEventListener('click', step);
+  $('reset').addEventListener('click', reset);
+  reset();
+
+  // RoPE rotation demo
+  const TH = 0.4, PHI = 0.9, KR = 0.8, C = 140, R = 100;
+  const m = $('m'), n = $('n');
+  const pt = (a, r) => [C + r * Math.cos(a), C - r * Math.sin(a)];
+  const setLine = (el, a, r) => { const [x, y] = pt(a, r); el.setAttribute('x2', x); el.setAttribute('y2', y); };
+  const setLabel = (el, a, r) => { const [x, y] = pt(a, r); el.setAttribute('x', x); el.setAttribute('y', y + 5); };
+
+  function draw() {
+    const mv = +m.value, nv = +n.value;
+    const qa = mv * TH, ka = PHI + nv * TH;
+    setLine($('q0'), 0, R);
+    setLine($('k0'), PHI, R * KR);
+    setLine($('qv'), qa, R);
+    setLine($('kv'), ka, R * KR);
+    setLabel($('ql'), qa, R + 16);
+    setLabel($('kl'), ka, R * KR + 16);
+    const d = Math.atan2(Math.sin(ka - qa), Math.cos(ka - qa));
+    const [ax, ay] = pt(qa, 34), [bx, by] = pt(qa + d, 34);
+    $('arc').setAttribute('d', 'M' + ax + ',' + ay + ' A34,34 0 0 ' + (d > 0 ? 0 : 1) + ' ' + bx + ',' + by);
+    $('mo').textContent = mv;
+    $('no').textContent = nv;
+    $('rel').textContent = mv - nv;
+    $('sc').textContent = (KR * Math.cos(ka - qa)).toFixed(3);
+  }
+
+  m.addEventListener('input', () => { if (+n.value > +m.value) n.value = m.value; draw(); });
+  n.addEventListener('input', () => { if (+n.value > +m.value) n.value = m.value; draw(); });
+  $('shift').addEventListener('click', () => {
+    const max = +m.max;
+    if (+m.value >= max) {
+      const d = Math.min(+m.value, +n.value);
+      m.value = +m.value - d;
+      n.value = +n.value - d;
+    } else {
+      m.value = +m.value + 1;
+      n.value = +n.value + 1;
+    }
+    draw();
+  });
+  draw();
+})();
+</script>
