@@ -5,3 +5,4 @@
 | 讲次 | 问题 | 页面 |
 | --- | --- | --- |
 | 1 | 全注意力 + RoPE 模型的 KV cache 怎么存？K 存的是旋转前还是旋转后？ | [01-rope-kv-cache.html](01-rope-kv-cache.html) |
+| 2 | Qwen3.5 的前向计算，以及 Gated DeltaNet 的状态缓存如何设计？ | [02-qwen3_5-gdn-cache.html](02-qwen3_5-gdn-cache.html) |

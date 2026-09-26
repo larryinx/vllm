@@ -1,0 +1,738 @@
+<meta charset="utf-8">
+<title>Qwen3.5 与 GDN 状态缓存</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;900&display=swap">
+<style>
+:root {
+  --bg: #F3F5F8;
+  --surface: #FFFFFF;
+  --ink: #141A23;
+  --muted: #556072;
+  --line: #D8DEE6;
+  --code-bg: #ECEFF4;
+  --attn: #2456D6;
+  --attn-tint: #E2E9FB;
+  --gdn: #0B7A64;
+  --gdn-tint: #DCF0EA;
+  --conv: #9E5C00;
+  --conv-tint: #F6E9D6;
+  --gate: #B02A6C;
+  --gate-tint: #F7E5EE;
+  --free: #F7F8FA;
+  --serif: "Noto Serif SC", "Songti SC", "STSong", serif;
+  --sans: "Noto Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0D1117;
+    --surface: #151B23;
+    --ink: #E6EAF0;
+    --muted: #9AA5B5;
+    --line: #2A333F;
+    --code-bg: #1A212B;
+    --attn: #8AA8FF;
+    --attn-tint: #1C2745;
+    --gdn: #4CCDB0;
+    --gdn-tint: #0F2E28;
+    --conv: #EDAA4B;
+    --conv-tint: #37280F;
+    --gate: #F37AB3;
+    --gate-tint: #36192A;
+    --free: #121820;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0D1117;
+  --surface: #151B23;
+  --ink: #E6EAF0;
+  --muted: #9AA5B5;
+  --line: #2A333F;
+  --code-bg: #1A212B;
+  --attn: #8AA8FF;
+  --attn-tint: #1C2745;
+  --gdn: #4CCDB0;
+  --gdn-tint: #0F2E28;
+  --conv: #EDAA4B;
+  --conv-tint: #37280F;
+  --gate: #F37AB3;
+  --gate-tint: #36192A;
+  --free: #121820;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.85;
+  letter-spacing: 0.01em;
+}
+.page {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding-inline: 20px;
+  padding-block: 40px 80px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 32px;
+}
+@media (min-width: 1000px) {
+  .page { grid-template-columns: 200px minmax(0, 1fr); gap: 56px; }
+  .toc { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 32px); align-self: start; }
+}
+article { max-width: 760px; min-width: 0; }
+
+h1, h2, h3 { text-wrap: balance; }
+h1 { font-family: var(--serif); font-weight: 900; font-size: clamp(28px, 5vw, 42px); line-height: 1.3; margin: 8px 0 16px; }
+h2 { font-family: var(--serif); font-weight: 600; font-size: 25px; line-height: 1.4; margin: 64px 0 12px; scroll-margin-top: 24px; }
+h3 { font-size: 17px; font-weight: 700; margin: 32px 0 6px; }
+p { margin: 0 0 14px; }
+a { color: var(--attn); }
+a:focus-visible, button:focus-visible, input:focus-visible { outline: 2px solid var(--gate); outline-offset: 2px; }
+.eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.lede { font-size: 17px; color: var(--muted); max-width: 62ch; }
+
+.toc { font-size: 14px; }
+.toc .eyebrow { display: block; margin-bottom: 8px; }
+.toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.toc a { color: var(--muted); text-decoration: none; }
+.toc a:hover { color: var(--ink); }
+@media (max-width: 999px) {
+  .toc { border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px; background: var(--surface); }
+  .toc ol { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 2px 16px; }
+}
+
+.t { font-family: var(--mono); font-size: 0.92em; padding: 0 4px; border-radius: 4px; white-space: nowrap; }
+.t.a { color: var(--attn); background: var(--attn-tint); }
+.t.g { color: var(--gdn); background: var(--gdn-tint); }
+.t.c { color: var(--conv); background: var(--conv-tint); }
+.t.z { color: var(--gate); background: var(--gate-tint); }
+code { font-family: var(--mono); font-size: 0.88em; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+
+.answer {
+  margin-top: 28px;
+  background: var(--gdn-tint);
+  border: 1px solid color-mix(in srgb, var(--gdn) 35%, transparent);
+  border-radius: 14px;
+  padding: 22px 24px;
+}
+.answer h2 { margin: 0 0 10px; font-size: 20px; }
+.answer ul { margin: 0; padding-left: 1.2em; display: grid; gap: 8px; }
+
+.strip { display: grid; grid-template-columns: repeat(16, minmax(0, 1fr)); gap: 3px; margin: 16px 0 6px; }
+.strip span { font: 11px/1 var(--mono); text-align: center; padding: 8px 0; border-radius: 4px; font-variant-numeric: tabular-nums; }
+.strip .g { background: var(--gdn-tint); color: var(--gdn); }
+.strip .a { background: var(--attn); color: var(--surface); font-weight: 600; }
+@media (max-width: 520px) { .strip { grid-template-columns: repeat(8, minmax(0, 1fr)); } }
+
+.code { margin: 16px 0 20px; border: 1px solid var(--line); border-radius: 10px; background: var(--code-bg); overflow: hidden; }
+.code .path { font-family: var(--mono); font-size: 12px; color: var(--muted); padding: 8px 14px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.code pre { margin: 0; padding: 12px 14px; overflow-x: auto; font-family: var(--mono); font-size: 13px; line-height: 1.7; }
+.code pre code { background: none; padding: 0; font-size: inherit; overflow-wrap: normal; }
+.code .c { color: var(--muted); }
+.code .hl { background: var(--gdn-tint); display: inline-block; min-width: 100%; }
+
+.figure { margin: 20px 0 8px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); padding: 16px; overflow-x: auto; }
+.figure svg { display: block; width: 100%; height: auto; }
+.figure svg.wide { min-width: 700px; }
+.caption { font-size: 13px; color: var(--muted); margin: 6px 0 20px; }
+
+.d-box { fill: var(--surface); stroke: var(--line); stroke-width: 1.5; }
+.d-gdn { fill: var(--gdn-tint); stroke: var(--gdn); stroke-width: 1.5; }
+.d-conv { fill: var(--conv-tint); stroke: var(--conv); stroke-width: 1.5; }
+.d-gate { fill: var(--gate-tint); stroke: var(--gate); stroke-width: 1.5; }
+.d-t { fill: var(--ink); font: 600 13px var(--mono); }
+.d-s { fill: var(--muted); font: 11px var(--mono); }
+.d-zh { fill: var(--ink); font: 700 13px var(--sans); }
+.d-note { font: 500 11px var(--sans); }
+.d-line { stroke: var(--muted); stroke-width: 1.5; fill: none; }
+.d-line.g { stroke: var(--gdn); }
+.d-line.c { stroke: var(--conv); }
+.d-line.z { stroke: var(--gate); }
+.f-g { fill: var(--gdn); } .f-c { fill: var(--conv); } .f-z { fill: var(--gate); } .f-m { fill: var(--muted); } .f-a { fill: var(--attn); }
+
+.formula { font-family: var(--mono); font-size: 15px; background: var(--code-bg); border-radius: 8px; padding: 12px 14px; margin: 12px 0 16px; overflow-x: auto; white-space: nowrap; line-height: 2; }
+
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin: 16px 0 8px; }
+.fact { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; background: var(--surface); }
+.fact b { display: block; font-family: var(--mono); font-size: 22px; font-variant-numeric: tabular-nums; }
+.fact span { font-size: 13px; color: var(--muted); line-height: 1.5; display: block; }
+
+.pagebar { margin: 16px 0 4px; }
+.pagebar .row { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 12px; align-items: center; margin-bottom: 8px; font-size: 13px; }
+.pagebar .row > span { color: var(--muted); }
+.bar { display: flex; height: 26px; border-radius: 6px; overflow: hidden; border: 1px solid var(--line); }
+.bar i { display: block; height: 100%; }
+.bar .conv { background: var(--conv); }
+.bar .ssm { background: var(--gdn); }
+.bar .pad { background: repeating-linear-gradient(135deg, var(--line) 0 3px, var(--surface) 3px 6px); }
+.bar .kv { background: var(--attn); }
+.bar .kv:nth-child(even) { opacity: 0.8; }
+.pagebar .legend { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12px; color: var(--muted); padding-left: 104px; }
+@media (max-width: 520px) { .pagebar .legend { padding-left: 0; } .pagebar .row { grid-template-columns: 1fr; gap: 4px; } }
+.legend i { display: inline-block; width: 12px; height: 10px; border-radius: 2px; vertical-align: -1px; margin-right: 5px; }
+
+.lab { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); padding: 16px; margin: 20px 0 8px; }
+.controls { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; margin-bottom: 12px; }
+.controls label { font-size: 14px; color: var(--muted); }
+.controls input[type=range] { width: min(300px, 100%); accent-color: var(--gdn); }
+.controls output { font-family: var(--mono); font-variant-numeric: tabular-nums; min-width: 8ch; }
+.readout { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin-top: 12px; }
+.readout div { border-top: 1px solid var(--line); padding-top: 8px; }
+.readout b { display: block; font-family: var(--mono); font-size: 20px; font-variant-numeric: tabular-nums; }
+.readout span { font-size: 13px; color: var(--muted); }
+.chart-wrap { overflow-x: auto; }
+.chart-wrap svg { display: block; width: 100%; min-width: 520px; height: auto; }
+.grid-line { stroke: var(--line); stroke-width: 1; }
+.tick { fill: var(--muted); font: 11px var(--mono); }
+.ln { fill: none; stroke-width: 2.5; stroke-linejoin: round; }
+.ln.all { stroke: var(--muted); stroke-dasharray: 6 5; }
+.ln.hyb { stroke: var(--gdn); }
+.ln.state { stroke: var(--gdn); stroke-width: 1.5; stroke-dasharray: 2 4; opacity: 0.8; }
+.marker { stroke: var(--gate); stroke-width: 1.5; stroke-dasharray: 3 3; }
+
+.pool-wrap { overflow-x: auto; }
+.pool-wrap svg { display: block; min-width: 600px; width: 100%; height: auto; }
+.cell { stroke-width: 1; }
+.cell.attn { fill: var(--attn-tint); stroke: var(--attn); }
+.cell.gdn { fill: var(--gdn-tint); stroke: var(--gdn); }
+.cell.free { fill: var(--free); stroke: var(--line); stroke-dasharray: 3 2; }
+.cell.null { fill: var(--line); stroke: var(--line); }
+.col-hit { fill: transparent; cursor: pointer; }
+.col-sel { fill: none; stroke: var(--gate); stroke-width: 2; }
+.pool-info { font-size: 14px; margin-top: 10px; min-height: 3.4em; }
+
+.table-wrap { overflow-x: auto; margin: 16px 0; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; line-height: 1.6; }
+th, td { text-align: left; vertical-align: top; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+tr:last-child td { border-bottom: 0; }
+th { font-weight: 700; font-size: 13px; color: var(--muted); background: var(--bg); }
+td code { white-space: nowrap; }
+.idx td:first-child { font-family: var(--mono); font-size: 12px; white-space: nowrap; }
+.phases td:first-child { white-space: nowrap; font-weight: 700; }
+.phases td { min-width: 200px; }
+.phases td:first-child { min-width: 0; }
+
+.list { padding-left: 1.2em; display: grid; gap: 10px; margin: 8px 0 16px; }
+.list li::marker { color: var(--muted); }
+.note { font-size: 14px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 16px; margin-top: 56px; }
+</style>
+
+<div class="page">
+  <nav class="toc" aria-label="目录">
+    <span class="eyebrow">目录</span>
+    <ol>
+      <li><a href="#answer">要点</a></li>
+      <li><a href="#stack">整体结构</a></li>
+      <li><a href="#attn">门控全注意力层</a></li>
+      <li><a href="#gdn">GDN 层的前向</a></li>
+      <li><a href="#rule">门控 delta 规则</a></li>
+      <li><a href="#phases">prefill 与 decode</a></li>
+      <li><a href="#state">状态的形状与大小</a></li>
+      <li><a href="#pool">同一个显存池</a></li>
+      <li><a href="#prefix">前缀缓存与投机解码</a></li>
+      <li><a href="#index">代码索引</a></li>
+    </ol>
+  </nav>
+
+  <article>
+    <span class="eyebrow">vLLM 源码导读 · 第 2 讲</span>
+    <h1>Qwen3.5 推理：前向计算与 Gated DeltaNet 的状态缓存</h1>
+    <p class="lede">Qwen3.5 是「线性注意力 + 全注意力」的混合模型。本讲以 Qwen3.5-9B（bf16，单卡，FlashAttention 后端）为例，看一层层前向怎么走，以及 vLLM 如何把两种完全不同的缓存放进同一个显存池。</p>
+
+    <section class="answer" id="answer" aria-label="要点">
+      <h2>要点</h2>
+      <ul>
+        <li><b>结构：</b>每 4 层为一组，前 3 层是 <span class="t g">Gated DeltaNet（GDN）</span> 线性注意力，第 4 层是带输出门的 <span class="t a">全注意力</span>。9B 共 32 层，其中 24 层 GDN、8 层全注意力。</li>
+        <li><b>全注意力层</b>和第 1 讲一样使用分页 KV cache，存的是 RoPE 后的 K，大小随上下文线性增长。</li>
+        <li><b>GDN 层</b>每个请求只保存两份固定大小的状态：<span class="t c">conv_state</span>（最近 3 个 token 的 q/k/v 输入，供短卷积使用）和 <span class="t g">ssm_state</span>（每个 value head 一个 128 × 128 的矩阵 S）。它们与上下文长度无关，每层约 2 MiB。</li>
+        <li><b>prefill</b> 用分块并行算法（块长 64）从初始状态算到末状态并写回；<b>decode</b> 每个 token 用递推 kernel 原地更新状态。</li>
+        <li>两种缓存共用一个块池。为了让一个「块」既能装下 GDN 一层的完整状态，又能装下注意力一层的若干 token，vLLM 把注意力的 block_size 从 16 调到 <b>528</b>。</li>
+      </ul>
+    </section>
+
+    <h2 id="stack">整体结构</h2>
+    <p>层的类型由 HF 配置里的 <code>layer_types</code> 决定。缺省时按 <code>full_attention_interval = 4</code> 生成：第 i 层当 (i + 1) 能被 4 整除时是全注意力，否则是线性注意力（<code>vllm/transformers_utils/configs/qwen3_5.py</code> 第 88–96 行）。Qwen3.5-9B 的实际配置正是如此：</p>
+    <div class="strip" id="strip" aria-label="Qwen3.5-9B 的 32 层：每 4 层中前 3 层为 GDN，第 4 层为全注意力"></div>
+    <div class="legend" style="display:flex;gap:16px;font-size:12px;color:var(--muted)"><span><i style="background:var(--gdn-tint);outline:1px solid var(--gdn)"></i>GDN 线性注意力（24 层）</span><span><i style="background:var(--attn)"></i>全注意力（8 层：3, 7, …, 31）</span></div>
+
+    <p style="margin-top:16px">vLLM 里 Qwen3.5 的实现大量复用 Qwen3-Next：<code>Qwen3_5DecoderLayer</code> 继承 <code>Qwen3NextDecoderLayer</code>，按层类型创建 <code>QwenGatedDeltaNetAttention</code> 或 <code>Qwen3NextAttention</code>。每层的前向就是标准的 pre-norm 残差结构，只是「注意力」这一步分两种：</p>
+    <div class="code">
+      <div class="path">vllm/model_executor/models/qwen3_next.py · Qwen3NextDecoderLayer.forward（第 549 行起，节选）</div>
+<pre><code>hidden_states, residual = self.input_layernorm(hidden_states, residual)
+
+<span class="hl">if self.layer_type == "linear_attention":</span>
+<span class="hl">    hidden_states = self.linear_attn(hidden_states=hidden_states)   <span class="c"># 注意：不需要 positions</span></span>
+elif self.layer_type == "full_attention":
+    hidden_states = self.self_attn(hidden_states=hidden_states, positions=positions)
+
+hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
+hidden_states = self.mlp(hidden_states)       <span class="c"># 9B：稠密 MLP；35B-A3B 等：稀疏 MoE</span></code></pre>
+    </div>
+    <p>GDN 层不接收 <code>positions</code>：它没有位置编码，token 的先后顺序由卷积和递推本身体现。只有全注意力层用 RoPE。</p>
+    <p>和 Qwen3-Next 相比，Qwen3.5 的差异主要有三点：checkpoint 里 GDN 的投影是分开存的（<code>in_proj_qkv</code>、<code>in_proj_z</code>、<code>in_proj_b</code>、<code>in_proj_a</code>），加载时融合成 <code>in_proj_qkvz</code> 和 <code>in_proj_ba</code>（<code>qwen3_5.py</code> 第 220–226 行）；融合后的权重是 <code>[q, k, v, z]</code> 顺序，不需要 Qwen3-Next 那种交错布局的重排（<code>gqa_interleaved_layout=False</code>）；Qwen3.5 自带视觉编码器，全注意力层用 M-RoPE。</p>
+
+    <h2 id="attn">门控全注意力层</h2>
+    <p><code>Qwen3NextAttention</code> 在普通 GQA 上加了三样东西：q 投影同时输出一个同样大小的门 gate；q、k 先过 RMSNorm（QK-Norm）；注意力输出乘以 sigmoid(gate) 后再进 o_proj。9B 的参数是 16 个 q head、4 个 KV head、head_dim 256，RoPE 只转前 64 维（<code>partial_rotary_factor = 0.25</code>），且是交错 M-RoPE（<code>mrope_section = [11, 11, 10]</code>，θ 基数 10<sup>7</sup>）。</p>
+    <div class="code">
+      <div class="path">vllm/model_executor/models/qwen3_next.py · Qwen3NextAttention.forward（第 449–461 行）</div>
+<pre><code>def forward(self, positions, hidden_states):
+    qkv, _ = self.qkv_proj(hidden_states)
+<span class="hl">    q, k, v, gate = self._project_qkv_gate(qkv, positions)  <span class="c"># split + QK-Norm + RoPE</span></span>
+    attn_output = self.attn(q, k, v)                         <span class="c"># 写 KV cache + 注意力</span>
+<span class="hl">    if gate is not None:</span>
+<span class="hl">        attn_output = attn_output * torch.sigmoid(gate)</span>
+    output, _ = self.o_proj(attn_output)
+    return output</code></pre>
+    </div>
+    <p>在 CUDA 上，split、QK-Norm、RoPE 和拆出 gate 由一个 Triton kernel <code>fused_qk_rmsnorm_rope_gate</code> 一次完成。之后 <code>self.attn</code> 就是第 1 讲的 <code>Attention</code>：k′、v 按 slot_mapping 写进分页 cache。每个 token 每层占 4 个 KV head × (256 + 256) × 2 B = <b>4 KiB</b>，8 层合计 32 KiB。</p>
+
+    <h2 id="gdn">GDN 层的前向</h2>
+    <p>GDN 层的实现是 <code>vllm/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py</code> 里的 <code>QwenGatedDeltaNetAttention</code>。9B 的 GDN 有 16 个 q/k head 和 32 个 v head，head 维度都是 128；每个 q/k head 服务 2 个 v head（线性注意力里的 GQA）。一次前向分三段：</p>
+
+    <div class="figure" role="img" aria-label="GDN 层数据流：hidden_states 经 in_proj_qkvz 得到 qkv 和 z，经 in_proj_ba 得到 b 和 a。qkv 过短卷积（读写 conv_state）并对 q、k 做 L2 归一化；a、b 算出衰减 g 和写入强度 β；两者进入门控 delta 规则（读写 ssm_state S）得到输出 o；o 与 z 进入 RMSNormGated，再经 out_proj 输出。">
+      <svg class="wide" viewBox="0 0 820 390" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" class="f-m"/></marker>
+          <marker id="ahg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" class="f-g"/></marker>
+          <marker id="ahc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" class="f-c"/></marker>
+          <marker id="ahz" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" class="f-z"/></marker>
+        </defs>
+
+        <rect x="16" y="56" width="116" height="44" rx="8" class="d-box"/>
+        <text x="74" y="83" text-anchor="middle" class="d-t">hidden_states</text>
+        <rect x="160" y="56" width="124" height="44" rx="8" class="d-box"/>
+        <text x="222" y="83" text-anchor="middle" class="d-t">in_proj_qkvz</text>
+        <rect x="312" y="56" width="84" height="44" rx="8" class="d-box"/>
+        <text x="354" y="76" text-anchor="middle" class="d-t">split</text>
+        <text x="354" y="92" text-anchor="middle" class="d-s">qkv | z</text>
+        <rect x="424" y="56" width="176" height="44" rx="8" class="d-box"/>
+        <text x="512" y="76" text-anchor="middle" class="d-t">causal_conv1d</text>
+        <text x="512" y="92" text-anchor="middle" class="d-s">k=4 · SiLU · L2Norm(q,k)</text>
+        <rect x="628" y="56" width="142" height="44" rx="8" class="d-conv"/>
+        <text x="699" y="76" text-anchor="middle" class="d-t f-c">conv_state</text>
+        <text x="699" y="92" text-anchor="middle" class="d-s">[3, 8192] bf16</text>
+
+        <path d="M132,78 H158" class="d-line" marker-end="url(#ah)"/>
+        <path d="M284,78 H310" class="d-line" marker-end="url(#ah)"/>
+        <path d="M396,78 H422" class="d-line" marker-end="url(#ah)"/>
+        <path d="M602,78 H626" class="d-line c" marker-start="url(#ahc)" marker-end="url(#ahc)"/>
+
+        <path d="M354,56 V30 H800 V280 H772" class="d-line z" marker-end="url(#ahz)"/>
+        <text x="590" y="24" text-anchor="middle" class="d-note f-z">z：输出门，不参与卷积</text>
+
+        <path d="M146,78 V172 H158" class="d-line" marker-end="url(#ah)"/>
+        <rect x="160" y="150" width="124" height="44" rx="8" class="d-box"/>
+        <text x="222" y="177" text-anchor="middle" class="d-t">in_proj_ba</text>
+        <path d="M284,172 H310" class="d-line" marker-end="url(#ah)"/>
+        <text x="297" y="164" text-anchor="middle" class="d-s">b, a</text>
+        <rect x="312" y="150" width="168" height="44" rx="8" class="d-box"/>
+        <text x="396" y="170" text-anchor="middle" class="d-t">g, β</text>
+        <text x="396" y="186" text-anchor="middle" class="d-s">衰减 · 写入强度</text>
+
+        <path d="M512,100 V248" class="d-line" marker-end="url(#ah)"/>
+        <text x="520" y="178" class="d-s">q, k, v</text>
+        <path d="M396,194 V248" class="d-line" marker-end="url(#ah)"/>
+
+        <rect x="312" y="250" width="272" height="60" rx="8" class="d-gdn"/>
+        <text x="448" y="273" text-anchor="middle" class="d-zh">门控 delta 规则</text>
+        <text x="448" y="293" text-anchor="middle" class="d-s">更新 S，输出 o = S·q</text>
+        <path d="M448,312 V334" class="d-line g" marker-start="url(#ahg)" marker-end="url(#ahg)"/>
+        <rect x="352" y="336" width="192" height="36" rx="8" class="d-gdn"/>
+        <text x="448" y="359" text-anchor="middle" class="d-t f-g">ssm_state S [32,128,128]</text>
+
+        <path d="M584,280 H610" class="d-line" marker-end="url(#ah)"/>
+        <text x="597" y="272" text-anchor="middle" class="d-s">o</text>
+        <rect x="612" y="250" width="158" height="60" rx="8" class="d-box"/>
+        <text x="691" y="273" text-anchor="middle" class="d-t">RMSNormGated</text>
+        <text x="691" y="293" text-anchor="middle" class="d-s">norm(o)·w·SiLU(z)</text>
+        <path d="M691,310 V334" class="d-line" marker-end="url(#ah)"/>
+        <rect x="628" y="336" width="126" height="36" rx="8" class="d-box"/>
+        <text x="691" y="359" text-anchor="middle" class="d-t">out_proj</text>
+
+        <path d="M416,46 H608 V380 H304 V140 H416 Z" fill="none" stroke="var(--muted)" stroke-width="1" stroke-dasharray="6 5"/>
+        <text x="296" y="356" text-anchor="end" class="d-note f-m">② 自定义算子</text>
+        <text x="296" y="372" text-anchor="end" class="d-s">qwen_gdn_attention_core</text>
+        <text x="222" y="130" text-anchor="middle" class="d-note f-m">① 投影</text>
+        <text x="691" y="242" text-anchor="middle" class="d-note f-m">③ 输出</text>
+      </svg>
+    </div>
+    <p class="caption">一个 GDN 层的数据流（Qwen3.5-9B，单卡）。两个带颜色的方框就是这一层要缓存的全部状态。</p>
+
+    <ol class="list">
+      <li><b>① 投影：</b><code>in_proj_qkvz</code> 输出 q（2048）、k（2048）、v（4096）、z（4096）；<code>in_proj_ba</code> 输出每个 v head 一个 b 和一个 a（各 32）。</li>
+      <li><b>② 核心：</b>q/k/v 拼在一起（conv_dim = 8192）做深度可分离的短卷积，卷积核长 4，接 SiLU；然后 q、k 做 L2 归一化；由 a、b 算出衰减 g 和写入强度 β；最后跑门控 delta 规则，更新状态并得到输出 o。这一段被包成自定义算子 <code>torch.ops.vllm.qwen_gdn_attention_core</code>。</li>
+      <li><b>③ 输出：</b><code>RMSNormGated</code> 对每个 v head 的 o 做 RMSNorm，再乘以 SiLU(z)，最后 <code>out_proj</code> 投回 hidden_size。</li>
+    </ol>
+    <div class="code">
+      <div class="path">vllm/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py · forward_cuda（第 895 行起，节选）</div>
+<pre><code>mixed_qkvz, _ = self.in_proj_qkvz(hidden_states)
+ba, _ = self.in_proj_ba(hidden_states)
+<span class="c"># Qwen3.5: weights are already in [q, k, v, z] and [b, a] order</span>
+mixed_qkv, z = mixed_qkvz.split([qkv_size, z_size], dim=-1)
+b, a = self.split_ba(ba)
+
+core_attn_out = torch.zeros((num_tokens, self.num_v_heads // self.tp_size, self.head_v_dim), ...)
+<span class="hl">torch.ops.vllm.qwen_gdn_attention_core(</span>
+<span class="hl">    mixed_qkv, b.contiguous(), a.contiguous(), core_attn_out,</span>
+<span class="hl">    layer_name=_encode_layer_name(self.prefix),</span>
+<span class="hl">)</span>
+return self._output_projection(core_attn_out, z)   <span class="c"># RMSNormGated + out_proj</span></code></pre>
+    </div>
+    <p>为什么要包成自定义算子？核心部分要根据当前 batch 的元数据（多少个 prefill、多少个 decode、哪些是投机解码）在 Python 里分支，还要原地改写状态缓存，这些都没法被 torch.compile 追踪成静态图。所以这个算子被列为 CUDA graph 的切分点（和普通注意力一样），投影、归一化这些前后部分照常编译和捕获，核心部分夹在图的片段之间执行。在支持的配置上（bf16、head 维度 128、SM80 及以上），默认还会走一个把 RMSNormGated 也融进去的变体 <code>qwen_gdn_attention_core_fused_norm_packed</code>，逻辑相同。</p>
+
+    <h2 id="rule">门控 delta 规则：状态 S 在做什么</h2>
+    <p>对每个 v head，状态 S 是一个 d<sub>v</sub> × d<sub>k</sub> = 128 × 128 的矩阵，可以把它看成一个「键 → 值」的联想记忆：给一个 k，<code>S·k</code> 就是它记住的值。每来一个 token t：</p>
+    <div class="formula">
+      α<sub>t</sub> = exp(g<sub>t</sub>)，g<sub>t</sub> = −exp(A_log) · softplus(a<sub>t</sub> + dt_bias)，β<sub>t</sub> = σ(b<sub>t</sub>)<br>
+      S<sub>t</sub> = α<sub>t</sub>·S<sub>t−1</sub> + β<sub>t</sub>·(v<sub>t</sub> − α<sub>t</sub>·S<sub>t−1</sub>k<sub>t</sub>)·k<sub>t</sub><sup>⊤</sup><br>
+      o<sub>t</sub> = S<sub>t</sub> · q<sub>t</sub> / √d<sub>k</sub>
+    </div>
+    <p>三个动作依次是：先按 α 整体衰减（遗忘，α ∈ (0, 1)）；再用衰减后的 S 读出 k 当前对应的值，与真实的 v 比较得到误差；最后按 β 的比例把误差写回 k 的方向。和普通线性注意力「只加不改」相比，delta 规则会<b>覆盖</b>同一个键上的旧值，所以在固定大小的状态里记得更准。vLLM 的 CPU 测试里有一段逐 token 的参考实现，最直观：</p>
+    <div class="code">
+      <div class="path">tests/kernels/mamba/cpu/test_cpu_gdn_ops.py（第 167–178 行，参考实现）</div>
+<pre><code>for token_idx in range(seq_len):
+    ...
+    g_t = g_seq[:, :, token_idx].exp().unsqueeze(-1).unsqueeze(-1)   <span class="c"># α_t</span>
+    beta_t = beta_seq[:, :, token_idx].unsqueeze(-1)
+<span class="hl">    state = state * g_t                                   <span class="c"># 衰减</span></span>
+<span class="hl">    kv_mem = (state * k_t.unsqueeze(-2)).sum(dim=-1)      <span class="c"># 读：S·k</span></span>
+<span class="hl">    delta = (v_t - kv_mem) * beta_t                       <span class="c"># 误差 × β</span></span>
+<span class="hl">    state = state + delta.unsqueeze(-1) * k_t.unsqueeze(-2)   <span class="c"># 写：+ δ·kᵀ</span></span>
+    out_seq[:, :, token_idx] = (state * q_t.unsqueeze(-2)).sum(dim=-1)</code></pre>
+    </div>
+    <p>这里的 <code>A_log</code> 和 <code>dt_bias</code> 是每个 v head 一个的可学习参数（<code>A_log</code> 用 fp32 存）。GPU 上 g、β 的计算和 q、k 的 L2 归一化被融进 Triton kernel（prefill 在 <code>fused_gdn_prefill_post_conv.py</code>，decode 在递推 kernel 内部）。</p>
+
+    <h2 id="phases">prefill 与 decode：同一份状态，两种算法</h2>
+    <p>这一步和注意力完全不同：GDN 层不需要读整段历史，只需要「上一步留下的状态」。所以 vLLM 的元数据构建器 <code>GDNAttentionMetadataBuilder</code>（<code>vllm/v1/attention/backends/gdn_attn.py</code>）给每个请求算出三样东西：它的状态存在哪个槽（<code>state_indices</code>）、是否已有状态（<code>has_initial_state = 已计算 token 数 &gt; 0</code>）、以及它在本 batch 里是 decode 还是 prefill。batch 会被重排成「decode 在前、prefill 在后」（<code>reorder_batch_threshold = 1</code>），GDN 层据此分两路：</p>
+    <div class="table-wrap">
+      <table class="phases">
+        <thead><tr><th></th><th>decode（每个请求 1 个新 token）</th><th>prefill / chunked prefill 的一段</th></tr></thead>
+        <tbody>
+          <tr><td>短卷积</td><td><code>causal_conv1d_update</code>：用 conv_state 里的 3 个历史输入加新输入算出 1 个输出，窗口原地左移一格</td><td><code>causal_conv1d_fn</code>：已有状态时从 conv_state 读 3 个历史输入，否则补零；算完把这段的最后 3 个输入写回</td></tr>
+          <tr><td>状态更新</td><td>逐 token 递推 kernel（<code>fused_recurrent_gated_delta_rule_packed_decode</code> 等），在 ssm_state 上原地更新 S</td><td><code>chunk_gated_delta_rule</code>：以 64 个 token 为一块，块内用矩阵乘并行，块间传递状态；初始状态取自 ssm_state，算完把末状态写回</td></tr>
+          <tr><td>每步开销</td><td>与上下文长度无关：每层把 S 读一遍、写一遍</td><td>与本段长度成正比</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>prefill 路径的状态读写写得非常直白：</p>
+    <div class="code">
+      <div class="path">vllm/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py · _forward_core（第 1495–1523 行，节选）</div>
+<pre><code>prefill_state_indices = attn_metadata.prefill_state_indices
+prefill_has_initial_state = attn_metadata.prefill_has_initial_state
+<span class="hl">initial_state = ssm_state[prefill_state_indices]</span>
+<span class="hl">initial_state[~prefill_has_initial_state, ...] = 0        <span class="c"># 新请求从零状态开始</span></span>
+(core_attn_out_non_spec, last_recurrent_state) = self.chunk_gated_delta_rule(
+    q=query_non_spec, k=key_non_spec, v=value_non_spec, g=g_non_spec, beta=beta_non_spec,
+    initial_state=initial_state, output_final_state=True,
+    cu_seqlens=attn_metadata.prefill_query_start_loc, ...
+)
+<span class="c"># Init cache</span>
+<span class="hl">ssm_state[prefill_state_indices] = last_recurrent_state.to(ssm_state.dtype)</span></code></pre>
+    </div>
+    <p>这也解释了 chunked prefill 为什么能工作：一个 8K 的 prompt 被切成几段分几步算，第二段开始 <code>has_initial_state</code> 为真，直接从上一段写回的状态接着算，结果和一次算完相同。prefill 的 chunk kernel 在 H100 上默认用 FlashInfer 实现，其他情况用 Triton（FLA）实现。只有纯 decode 的 batch 才能用完整 CUDA graph（<code>AttentionCGSupport.UNIFORM_BATCH</code>）。</p>
+
+    <h2 id="state">状态的形状与大小</h2>
+    <p>每个 GDN 层向 vLLM 报告两份状态的形状，公式在 <code>MambaStateShapeCalculator.gated_delta_net_state_shape</code>：</p>
+    <div class="code">
+      <div class="path">vllm/model_executor/layers/mamba/mamba_utils.py（第 278–300 行）</div>
+<pre><code>conv_dim = head_k_dim * num_k_heads * 2 + head_v_dim * num_v_heads
+<span class="hl">conv_state_shape = cls._orient_conv_shape(</span>
+<span class="hl">    divide(conv_dim, tp_world_size), conv_kernel_size - 1 + num_spec,</span>
+<span class="hl">)</span>
+<span class="hl">temporal_state_shape = (</span>
+<span class="hl">    divide(num_v_heads, tp_world_size), head_v_dim, head_k_dim,</span>
+<span class="hl">)</span>
+return conv_state_shape, temporal_state_shape</code></pre>
+    </div>
+    <p>代入 9B 的配置（单卡、不开投机解码）：</p>
+    <div class="facts">
+      <div class="fact"><b>48 KiB</b><span>conv_state：[3, 8192] × bf16。卷积核长 4，只需记住前 3 个输入</span></div>
+      <div class="fact"><b>2 MiB</b><span>ssm_state：[32, 128, 128] × fp32。32 个 v head 各一个 S</span></div>
+      <div class="fact"><b>2,146,304 B</b><span>每个请求每个 GDN 层的状态合计，约 2.05 MiB</span></div>
+      <div class="fact"><b>49 MiB</b><span>每个请求 24 个 GDN 层合计，与上下文长度无关</span></div>
+    </div>
+    <p>两个 dtype 是分开控制的：conv_state 跟随 <code>--mamba-cache-dtype</code>（默认即模型 dtype，bf16）；ssm_state 跟随 <code>--mamba-ssm-cache-dtype</code>。后者设为 <code>auto</code> 时，vLLM 会读取 HF 配置中的 <code>mamba_ssm_dtype</code>，Qwen3.5 的官方配置写的是 <code>float32</code>（<code>vllm/model_executor/models/config.py</code> 第 819 行起）。递推的数值误差会一步步累积，所以 S 用 fp32 存。</p>
+    <p>张量并行时，conv_dim 和 v head 数都按 TP 切分，每张卡只存自己那部分 head 的状态。注意 ssm_state 的最后两维是 <code>[d_v, d_k]</code>，也就是 S 的行对应 v、列对应 k。</p>
+
+    <h3>和全注意力的 KV cache 比一比</h3>
+    <p>一层 GDN 的状态是 2,146,304 B，恰好等于一层全注意力 <b>524 个 token</b> 的 KV cache（524 × 4 KiB）。把这件事画出来：下面比较 Qwen3.5-9B 与一个假想的「32 层全是全注意力」的同尺寸模型，每个请求需要多少缓存。</p>
+    <div class="lab">
+      <div class="controls">
+        <label for="ctx">上下文长度</label>
+        <input type="range" id="ctx" min="6" max="18" step="0.05" value="15">
+        <output id="ctx-o" for="ctx">32,768</output>
+      </div>
+      <div class="chart-wrap">
+        <svg id="chart" viewBox="0 0 640 312" role="img" aria-label="每个请求的缓存大小随上下文长度变化（双对数坐标）。Qwen3.5-9B 在短上下文时由 49 MiB 的 GDN 状态主导，约 524 个 token 后低于假想的全注意力模型，长上下文时约为其四分之一。"></svg>
+      </div>
+      <div class="readout">
+        <div><b id="r-hyb">1.05 GiB</b><span>Qwen3.5-9B（8 层 KV + 24 层 GDN 状态）</span></div>
+        <div><b id="r-all">4.00 GiB</b><span>假想：32 层都是全注意力</span></div>
+        <div><b id="r-share">4.6%</b><span>GDN 状态在 Qwen3.5-9B 中的占比</span></div>
+      </div>
+    </div>
+    <p class="caption">双对数坐标，按 bf16 KV cache、fp32 ssm_state 计算原始字节数，未计入分块取整。</p>
+    <p>短请求时混合模型反而更费显存：不到 524 个 token 时，固定的 49 MiB 状态比省下的 KV 还多。上下文越长，混合结构越划算，最终稳定在全注意力模型的四分之一左右（只有 8/32 的层在存 KV）。</p>
+
+    <h2 id="pool">两种缓存，同一个显存池</h2>
+    <p>vLLM v1 只有一个块池（<code>BlockPool</code>），所有层共用一套块号。可是两种层对「一块」的需求完全不同：注意力层一块存 block_size 个 token，GDN 层一块要装下一整份状态。vLLM 的做法是让两者的<b>页大小（每层每块的字节数）相等</b>。</p>
+
+    <h3>第一步：放大注意力的 block_size</h3>
+    <p>GDN 层用 <code>MambaSpec</code> 描述，页大小就是所有状态的字节数之和。启动时 <code>Platform._align_hybrid_block_size</code> 找出满足「注意力页 ≥ GDN 页」且是 kernel 对齐单位（FlashAttention 为 16）整数倍的最小 block_size：</p>
+    <div class="code">
+      <div class="path">vllm/platforms/interface.py · _align_hybrid_block_size（第 835 行起，节选）</div>
+<pre><code><span class="hl">attn_block_size = kernel_block_alignment_size * cdiv(</span>
+<span class="hl">    mamba_page_size,</span>
+<span class="hl">    kernel_block_alignment_size * attn_page_size_1_token,</span>
+<span class="hl">)</span>
+if cache_config.block_size &lt; attn_block_size:
+    cache_config.block_size = attn_block_size
+...
+<span class="c"># Pad mamba page size to exactly match attention page size</span>
+attn_page_size = cache_config.block_size * attn_page_size_1_token
+cache_config.mamba_page_size_padded = attn_page_size</code></pre>
+    </div>
+    <p>代入 9B：16 × ⌈2,146,304 ÷ (16 × 4096)⌉ = 16 × 33 = <b>528</b>。启动日志里会看到 <code>Setting attention block size to 528 tokens</code>。此时注意力页是 528 × 4 KiB = 2,162,688 B，GDN 页被补齐到同样大小（多出 16 KiB，约 0.8%）。换成 Qwen3.5-35B-A3B（只有 2 个 KV head，每 token 每层 2 KiB），同样的公式得到 1056。开 TP=2 时两边都减半，9B 仍是 528。</p>
+    <div class="pagebar" aria-label="一页 2,162,688 字节的两种用法，按比例绘制">
+      <div class="row"><span>GDN 层的一页</span><div class="bar"><i class="conv" style="width:2.273%"></i><i class="ssm" style="width:96.969%"></i><i class="pad" style="width:0.758%"></i></div></div>
+      <div class="row"><span>注意力层的一页</span><div class="bar" id="kvbar"></div></div>
+      <div class="legend">
+        <span><i style="background:var(--conv)"></i>conv_state 48 KiB</span>
+        <span><i style="background:var(--gdn)"></i>ssm_state 2 MiB</span>
+        <span><i style="background:repeating-linear-gradient(135deg,var(--line) 0 3px,var(--surface) 3px 6px)"></i>补齐 16 KiB</span>
+        <span><i style="background:var(--attn)"></i>528 个 token 的 K/V（每 16 个 token 一格）</span>
+      </div>
+    </div>
+    <p>GDN 层拿到自己那一页后，<code>MambaBase.bind_kv_cache</code> 把它切成两段视图：开头是 conv_state，紧接着是 ssm_state，剩下的补齐部分不用（<code>vllm/model_executor/layers/mamba/abstract.py</code> 第 28 行）。</p>
+
+    <h3>第二步：按层分组，组与组共享同一块显存</h3>
+    <p>KV cache 管理器把同类型的层分组，并要求每组层数相同。9B 有 8 层全注意力、24 层 GDN，于是组大小取 8：1 个注意力组，加上 3 个 GDN 组（第 i 组取 GDN 层列表的 <code>[i::3]</code>）。结果非常整齐：第 j 个「层槽」由第 4j、4j+1、4j+2 层（GDN）和第 4j+3 层（注意力）共用。</p>
+    <p>显存上，每个层槽是一段连续的页数组，所有组都从同一个起点映射过来（<code>kv_cache_utils.py</code> 中的注释 “Groups alias from byte 0”）。这之所以安全，是因为<b>一个块号同一时刻只属于一个组</b>：块 5 如果分给了请求 A 的注意力组，那 8 个层槽里的第 5 页就都是 A 的 K/V；如果分给了某个 GDN 组，就都是那 8 个 GDN 层的状态。一个块号因此对应 8 × 2,162,688 B = 16.5 MiB。</p>
+
+    <div class="lab">
+      <div class="controls">
+        <label for="lenA">请求 A 的长度</label>
+        <input type="range" id="lenA" min="1" max="4000" step="1" value="1200">
+        <output id="lenA-o" for="lenA">1,200</output>
+      </div>
+      <div class="pool-wrap"><svg id="pool" role="img" aria-label="块池示意：列是块号，行是 8 个层槽。每一列整列属于一个组：注意力组或某个 GDN 组。"></svg></div>
+      <div class="pool-info" id="pool-info" aria-live="polite"></div>
+    </div>
+    <p class="caption">块池示意（不开前缀缓存）。点击任意一列查看它存的是什么。请求 B 固定为 300 个 token。块 0 是保留的空块。</p>
+    <p>不开前缀缓存时（<code>mamba_cache_mode = "none"</code>），GDN 组的 block_size 被设成 <code>max_model_len</code>，所以无论请求多长，每个 GDN 组都只占 1 个块；注意力组占 ⌈L ÷ 528⌉ 个块。拖动上面的滑块可以看到：变长的只有蓝色的列。</p>
+    <p>代价也在这里：注意力 KV 以 528 个 token 为单位分配，每个请求最多浪费 527 个 token 的空间；前缀缓存的粒度也随之变成 528 个 token。</p>
+
+    <h2 id="prefix">前缀缓存与投机解码</h2>
+    <h3>前缀缓存：只需要边界处的一份状态</h3>
+    <p>vLLM 默认开启前缀缓存，此时 Qwen3.5 的 GDN 层使用 <code>mamba_cache_mode = "align"</code>（Qwen3.5 不支持 <code>"all"</code>，在 <code>qwen3_5.py</code> 第 332 行直接报错）。align 模式的思路是：</p>
+    <ul class="list">
+      <li>GDN 组的 block_size 也设为 528，块表按位置编号：第 p 块用来存「恰好处理完 (p + 1) × 528 个 token 时的状态」。</li>
+      <li>调度器在 prefill 时把每段切到 528 的整数倍处结束（<code>Scheduler._mamba_block_aligned_split</code>），保证状态恰好落在边界上。</li>
+      <li>请求跨过一个边界时，分配新块作为运行中的状态块，前向之前由 <code>preprocess_mamba</code> 把上一步的状态拷贝过去；旧块保留下来，成为可被命中的前缀缓存。块表中更早的位置填空块，每个请求同时持有的真实 GDN 块只有 2 个左右。</li>
+      <li>命中时，注意力层需要前缀的全部 KV 块，GDN 层却只需要命中边界处的<b>那一个</b>状态块（<code>MambaManager.find_longest_cache_hit</code> 从右往左找最后一个已缓存的状态块）。</li>
+    </ul>
+    <p>元数据构建器通过 <code>mamba_get_block_table_tensor</code> 从块表中取出运行中的那一列作为状态槽，GDN kernel 看到的依然只是「每个请求一个 state index」。</p>
+
+    <h3>投机解码（MTP）</h3>
+    <p>Qwen3.5 自带一层 MTP 草稿头，可以用投机解码。设每步草稿 token 数为 n：</p>
+    <ul class="list">
+      <li>conv_state 的长度从 3 变为 3 + n，多留出草稿 token 的输入；</li>
+      <li>每个请求额外分配 n 个状态块，递推 kernel 在处理第 i 个草稿 token 后把状态写到第 i 个槽；</li>
+      <li>下一步从第「接受数 − 1」个槽读初始状态（<code>fused_sigmoid_gating.py</code> 第 104–112 行），被拒绝的草稿 token 对应的状态直接丢弃，不需要回滚。</li>
+    </ul>
+    <p>conv_state 变长会改变 GDN 页大小，所以开投机解码后算出的注意力 block_size 也可能不同。</p>
+
+    <h2 id="index">代码索引</h2>
+    <div class="table-wrap">
+      <table class="idx">
+        <thead><tr><th>位置</th><th>作用</th></tr></thead>
+        <tbody>
+          <tr><td>vllm/transformers_utils/configs/qwen3_5.py:88</td><td>缺省的 <code>layer_types</code>：每 4 层一层全注意力</td></tr>
+          <tr><td>vllm/model_executor/models/qwen3_5.py:120</td><td><code>Qwen3_5DecoderLayer</code>：按层类型创建 GDN 或全注意力</td></tr>
+          <tr><td>vllm/model_executor/models/qwen3_5.py:399</td><td>向 vLLM 报告 GDN 状态的形状</td></tr>
+          <tr><td>vllm/model_executor/models/qwen3_next.py:273</td><td><code>Qwen3NextAttention</code>：门控、QK-Norm、部分 RoPE</td></tr>
+          <tr><td>vllm/model_executor/models/qwen3_next.py:549</td><td>解码层前向</td></tr>
+          <tr><td>vllm/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py:372</td><td><code>QwenGatedDeltaNetAttention</code></td></tr>
+          <tr><td>vllm/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py:895</td><td>GDN 前向：投影、核心算子、输出</td></tr>
+          <tr><td>vllm/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py:1245</td><td><code>_forward_core</code>：按 prefill/decode 分路，读写状态</td></tr>
+          <tr><td>vllm/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py:1895</td><td>自定义算子 <code>qwen_gdn_attention_core</code></td></tr>
+          <tr><td>vllm/third_party/flash_linear_attention/ops/chunk.py</td><td>prefill 的分块算法 <code>chunk_gated_delta_rule</code></td></tr>
+          <tr><td>vllm/third_party/flash_linear_attention/ops/fused_sigmoid_gating.py</td><td>decode / 投机解码的递推 kernel</td></tr>
+          <tr><td>vllm/model_executor/layers/mamba/ops/causal_conv1d.py</td><td><code>causal_conv1d_fn</code> / <code>causal_conv1d_update</code></td></tr>
+          <tr><td>tests/kernels/mamba/cpu/test_cpu_gdn_ops.py:167</td><td>逐 token 的参考实现</td></tr>
+          <tr><td>vllm/model_executor/layers/mamba/mamba_utils.py:278</td><td>conv_state、ssm_state 的形状公式</td></tr>
+          <tr><td>vllm/model_executor/models/config.py:819</td><td>从 HF 配置读取 <code>mamba_ssm_dtype</code></td></tr>
+          <tr><td>vllm/model_executor/layers/mamba/abstract.py:28</td><td>把一页切成 conv_state 与 ssm_state 两个视图</td></tr>
+          <tr><td>vllm/v1/kv_cache_interface.py:1021</td><td><code>MambaSpec</code> 与它的页大小</td></tr>
+          <tr><td>vllm/platforms/interface.py:835</td><td>混合模型的注意力 block_size 对齐</td></tr>
+          <tr><td>vllm/v1/core/kv_cache_utils.py:1442</td><td>把层分成大小相同的组</td></tr>
+          <tr><td>vllm/v1/core/single_type_kv_cache_manager.py:1445</td><td><code>MambaManager</code>：GDN 状态块的分配与前缀命中</td></tr>
+          <tr><td>vllm/v1/attention/backends/gdn_attn.py:284</td><td>状态槽 = 块表第一列</td></tr>
+          <tr><td>vllm/v1/worker/mamba_utils.py:1432</td><td><code>preprocess_mamba</code>：align 模式下的状态拷贝</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="note">基于本仓库 commit eeb06da 编写，模型参数取自 Hugging Face 上 Qwen/Qwen3.5-9B 与 Qwen/Qwen3.5-35B-A3B 的 config.json，行号会随上游代码变化。可以接着问的问题：chunk_gated_delta_rule 的分块算法具体怎么把递推变成矩阵乘？MTP 草稿头在 vLLM 里怎么跑？</p>
+  </article>
+</div>
+
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const NS = 'http://www.w3.org/2000/svg';
+  const el = (tag, attrs, text) => {
+    const n = document.createElementNS(NS, tag);
+    for (const k in attrs) n.setAttribute(k, attrs[k]);
+    if (text !== undefined) n.textContent = text;
+    return n;
+  };
+  const fmtInt = (n) => n.toLocaleString('en-US');
+  const fmtBytes = (b) => {
+    const MiB = 1048576, GiB = 1073741824;
+    return b >= GiB ? (b / GiB).toFixed(2) + ' GiB' : (b / MiB).toFixed(1) + ' MiB';
+  };
+
+  // Layer strip
+  const strip = $('strip');
+  for (let i = 0; i < 32; i++) {
+    const s = document.createElement('span');
+    s.className = (i + 1) % 4 === 0 ? 'a' : 'g';
+    s.textContent = i;
+    strip.appendChild(s);
+  }
+
+  // KV page bar: 33 kernel blocks of 16 tokens
+  const kvbar = $('kvbar');
+  for (let i = 0; i < 33; i++) {
+    const b = document.createElement('i');
+    b.className = 'kv';
+    b.style.width = (100 / 33) + '%';
+    kvbar.appendChild(b);
+  }
+
+  // Memory chart (log-log)
+  const KV_TOKEN_HYB = 8 * 4096, KV_TOKEN_ALL = 32 * 4096, GDN_STATE = 24 * 2146304;
+  const X0 = 72, X1 = 612, Y0 = 18, Y1 = 270, EX0 = 6, EX1 = 18, EY0 = 22, EY1 = 36;
+  const fx = (L) => X0 + (Math.log2(L) - EX0) / (EX1 - EX0) * (X1 - X0);
+  const fy = (B) => Y1 - (Math.log2(B) - EY0) / (EY1 - EY0) * (Y1 - Y0);
+  const hyb = (L) => L * KV_TOKEN_HYB + GDN_STATE;
+  const all = (L) => L * KV_TOKEN_ALL;
+  const chart = $('chart');
+  [[64, '64'], [512, '512'], [4096, '4K'], [32768, '32K'], [262144, '256K']].forEach(([v, t]) => {
+    chart.appendChild(el('line', { x1: fx(v), x2: fx(v), y1: Y0, y2: Y1, class: 'grid-line' }));
+    chart.appendChild(el('text', { x: fx(v), y: Y1 + 18, 'text-anchor': 'middle', class: 'tick' }, t));
+  });
+  [[2 ** 22, '4 MiB'], [2 ** 26, '64 MiB'], [2 ** 30, '1 GiB'], [2 ** 34, '16 GiB']].forEach(([v, t]) => {
+    chart.appendChild(el('line', { x1: X0, x2: X1, y1: fy(v), y2: fy(v), class: 'grid-line' }));
+    chart.appendChild(el('text', { x: X0 - 8, y: fy(v) + 4, 'text-anchor': 'end', class: 'tick' }, t));
+  });
+  chart.appendChild(el('text', { x: X1, y: Y1 + 36, 'text-anchor': 'end', class: 'tick' }, '上下文长度（token）'));
+  const path = (f) => {
+    let d = '';
+    for (let e = EX0; e <= EX1 + 1e-9; e += 0.1) {
+      const L = 2 ** e;
+      d += (d ? 'L' : 'M') + fx(L).toFixed(1) + ',' + fy(f(L)).toFixed(1);
+    }
+    return d;
+  };
+  chart.appendChild(el('line', { x1: X0, x2: X1, y1: fy(GDN_STATE), y2: fy(GDN_STATE), class: 'ln state' }));
+  chart.appendChild(el('path', { d: path(all), class: 'ln all' }));
+  chart.appendChild(el('path', { d: path(hyb), class: 'ln hyb' }));
+  chart.appendChild(el('text', { x: X0 + 6, y: fy(GDN_STATE) + 16, class: 'tick', style: 'fill:var(--gdn)' }, 'GDN 状态 49 MiB（常数）'));
+  chart.appendChild(el('text', { x: fx(2 ** 15.2), y: fy(all(2 ** 15.2)) - 10, 'text-anchor': 'end', class: 'tick' }, '32 层全注意力（假想）'));
+  chart.appendChild(el('text', { x: fx(2 ** 16.2), y: fy(hyb(2 ** 16.2)) + 20, 'text-anchor': 'start', class: 'tick', style: 'fill:var(--gdn);font-weight:600' }, 'Qwen3.5-9B'));
+  chart.appendChild(el('circle', { cx: fx(524), cy: fy(all(524)), r: 4, style: 'fill:var(--gate)' }));
+  chart.appendChild(el('text', { x: fx(524) + 8, y: fy(all(524)) - 10, class: 'tick', style: 'fill:var(--gate)' }, '524 token 处相等'));
+  const mk = el('line', { y1: Y0, y2: Y1, class: 'marker' });
+  const dA = el('circle', { r: 4, style: 'fill:var(--muted)' });
+  const dH = el('circle', { r: 4.5, style: 'fill:var(--gdn)' });
+  chart.append(mk, dA, dH);
+
+  const ctx = $('ctx');
+  function updChart() {
+    const L = Math.round(2 ** +ctx.value);
+    const x = fx(L);
+    mk.setAttribute('x1', x); mk.setAttribute('x2', x);
+    dA.setAttribute('cx', x); dA.setAttribute('cy', fy(all(L)));
+    dH.setAttribute('cx', x); dH.setAttribute('cy', fy(hyb(L)));
+    $('ctx-o').textContent = fmtInt(L);
+    $('r-hyb').textContent = fmtBytes(hyb(L));
+    $('r-all').textContent = fmtBytes(all(L));
+    $('r-share').textContent = (100 * GDN_STATE / hyb(L)).toFixed(1) + '%';
+  }
+  ctx.addEventListener('input', updChart);
+  updChart();
+
+  // Block pool
+  const ROWS = 8, COLS = 16, CW = 30, CH = 18, GAP = 4, LX = 110, TY = 30;
+  const pool = $('pool');
+  const W = LX + COLS * (CW + GAP) + 10, H = TY + ROWS * (CH + GAP) + 44;
+  pool.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+  const lenA = $('lenA');
+  let sel = null;
+  const LB = 528, LEN_B = 300;
+
+  function layout() {
+    const cols = [{ kind: 'null' }];
+    const nA = Math.ceil(+lenA.value / LB);
+    for (let i = 0; i < nA; i++) cols.push({ kind: 'attn', req: 'A', idx: i });
+    for (let g = 0; g < 3; g++) cols.push({ kind: 'gdn', req: 'A', g });
+    cols.push({ kind: 'attn', req: 'B', idx: 0 });
+    for (let g = 0; g < 3; g++) cols.push({ kind: 'gdn', req: 'B', g });
+    while (cols.length < COLS) cols.push({ kind: 'free' });
+    return cols;
+  }
+
+  function describe(b, c) {
+    const len = c.req === 'A' ? +lenA.value : LEN_B;
+    if (c.kind === 'null') return '块 ' + b + '：保留的空块（null block），填充和占位时指向它。';
+    if (c.kind === 'free') return '块 ' + b + '：空闲，可以分给任何一个组。';
+    if (c.kind === 'attn') {
+      const s = c.idx * LB, e = Math.min(len, s + LB) - 1;
+      return '块 ' + b + ' 属于请求 ' + c.req + ' 的注意力组：8 个层槽分别存第 3, 7, …, 31 层的 K/V，覆盖第 ' + fmtInt(s) + '–' + fmtInt(e) + ' 个 token。';
+    }
+    const layers = [];
+    for (let j = 0; j < 8; j++) layers.push(4 * j + c.g);
+    return '块 ' + b + ' 属于请求 ' + c.req + ' 的 GDN 组 ' + c.g + '：8 个层槽分别存第 ' + layers.join(', ') + ' 层的 conv_state + ssm_state，与请求长度（' + fmtInt(len) + '）无关。';
+  }
+
+  function renderPool() {
+    const cols = layout();
+    pool.textContent = '';
+    for (let j = 0; j < ROWS; j++) {
+      const y = TY + j * (CH + GAP);
+      pool.appendChild(el('text', { x: 0, y: y + 13, class: 'tick' }, '槽 ' + j + '  层 ' + (4 * j) + '–' + (4 * j + 3)));
+    }
+    cols.forEach((c, b) => {
+      const x = LX + b * (CW + GAP);
+      pool.appendChild(el('text', { x: x + CW / 2, y: TY - 10, 'text-anchor': 'middle', class: 'tick' }, b));
+      for (let j = 0; j < ROWS; j++) {
+        pool.appendChild(el('rect', { x, y: TY + j * (CH + GAP), width: CW, height: CH, rx: 3, class: 'cell ' + c.kind }));
+      }
+      const fy1 = TY + ROWS * (CH + GAP) + 12;
+      if (c.req) {
+        pool.appendChild(el('text', { x: x + CW / 2, y: fy1, 'text-anchor': 'middle', class: 'tick', style: 'font-weight:600;fill:var(--ink)' }, c.req));
+        pool.appendChild(el('text', { x: x + CW / 2, y: fy1 + 16, 'text-anchor': 'middle', class: 'tick', style: c.kind === 'attn' ? 'fill:var(--attn)' : 'fill:var(--gdn)' }, c.kind === 'attn' ? 'attn' : 'G' + c.g));
+      }
+      const hit = el('rect', { x: x - 2, y: TY - 24, width: CW + 4, height: ROWS * (CH + GAP) + 58, class: 'col-hit', tabindex: 0, role: 'button', 'aria-label': '查看块 ' + b });
+      hit.addEventListener('click', () => { sel = b; renderPool(); });
+      hit.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); sel = b; renderPool(); } });
+      pool.appendChild(hit);
+    });
+    if (sel === null || sel >= cols.length) sel = cols.findIndex((c) => c.kind === 'gdn');
+    const sx = LX + sel * (CW + GAP);
+    pool.appendChild(el('rect', { x: sx - 3, y: TY - 3, width: CW + 6, height: ROWS * (CH + GAP) + 2, rx: 5, class: 'col-sel' }));
+    $('pool-info').textContent = describe(sel, cols[sel]);
+    $('lenA-o').textContent = fmtInt(+lenA.value);
+  }
+  lenA.addEventListener('input', () => { sel = null; renderPool(); });
+  renderPool();
+})();
+</script>
