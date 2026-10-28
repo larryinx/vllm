@@ -1,0 +1,808 @@
+<meta charset="utf-8">
+<title>前缀缓存与 Agent 多轮</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;900&display=swap">
+<style>
+:root {
+  --bg: #F3F5F8;
+  --surface: #FFFFFF;
+  --ink: #141A23;
+  --muted: #556072;
+  --line: #D8DEE6;
+  --code-bg: #ECEFF4;
+  --hit: #0B7A64;
+  --hit-tint: #DCF0EA;
+  --new: #B5620A;
+  --new-tint: #F8E8D4;
+  --key: #2456D6;
+  --key-tint: #E2E9FB;
+  --warn: #B02A6C;
+  --warn-tint: #F7E5EE;
+  --free: #F7F8FA;
+  --serif: "Noto Serif SC", "Songti SC", "STSong", serif;
+  --sans: "Noto Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0D1117;
+    --surface: #151B23;
+    --ink: #E6EAF0;
+    --muted: #9AA5B5;
+    --line: #2A333F;
+    --code-bg: #1A212B;
+    --hit: #4CCDB0;
+    --hit-tint: #0F2E28;
+    --new: #F0A54A;
+    --new-tint: #3A2810;
+    --key: #8AA8FF;
+    --key-tint: #1C2745;
+    --warn: #F37AB3;
+    --warn-tint: #36192A;
+    --free: #121820;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0D1117;
+  --surface: #151B23;
+  --ink: #E6EAF0;
+  --muted: #9AA5B5;
+  --line: #2A333F;
+  --code-bg: #1A212B;
+  --hit: #4CCDB0;
+  --hit-tint: #0F2E28;
+  --new: #F0A54A;
+  --new-tint: #3A2810;
+  --key: #8AA8FF;
+  --key-tint: #1C2745;
+  --warn: #F37AB3;
+  --warn-tint: #36192A;
+  --free: #121820;
+}
+
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--sans); font-size: 16px; line-height: 1.85; letter-spacing: 0.01em; }
+.page { max-width: 1120px; margin: 0 auto; padding-inline: 20px; padding-block: 40px 80px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 32px; }
+@media (min-width: 1000px) {
+  .page { grid-template-columns: 200px minmax(0, 1fr); gap: 56px; }
+  .toc { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 32px); align-self: start; }
+}
+article { max-width: 760px; min-width: 0; }
+h1, h2, h3 { text-wrap: balance; }
+h1 { font-family: var(--serif); font-weight: 900; font-size: clamp(28px, 5vw, 42px); line-height: 1.3; margin: 8px 0 16px; }
+h2 { font-family: var(--serif); font-weight: 600; font-size: 25px; line-height: 1.4; margin: 64px 0 12px; scroll-margin-top: 24px; }
+h3 { font-size: 17px; font-weight: 700; margin: 32px 0 6px; }
+p { margin: 0 0 14px; }
+a { color: var(--key); }
+a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--warn); outline-offset: 2px; }
+.eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.lede { font-size: 17px; color: var(--muted); max-width: 62ch; }
+
+.toc { font-size: 14px; }
+.toc .eyebrow { display: block; margin-bottom: 8px; }
+.toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.toc a { color: var(--muted); text-decoration: none; }
+.toc a:hover { color: var(--ink); }
+@media (max-width: 999px) {
+  .toc { border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px; background: var(--surface); }
+  .toc ol { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 2px 16px; }
+}
+
+.t { font-family: var(--mono); font-size: 0.92em; padding: 0 4px; border-radius: 4px; white-space: nowrap; }
+.t.h { color: var(--hit); background: var(--hit-tint); }
+.t.n { color: var(--new); background: var(--new-tint); }
+.t.k { color: var(--key); background: var(--key-tint); }
+.t.w { color: var(--warn); background: var(--warn-tint); }
+code { font-family: var(--mono); font-size: 0.88em; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+
+.answer { margin-top: 28px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 22px 24px; display: grid; gap: 14px; }
+.answer h2 { margin: 0; font-size: 20px; }
+.qa { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 4px 16px; align-items: start; }
+.qa .tag { font: 700 13px var(--sans); padding: 4px 8px; border-radius: 6px; text-align: center; }
+.qa .tag.off { background: var(--new-tint); color: var(--new); }
+.qa .tag.on { background: var(--hit-tint); color: var(--hit); }
+.qa .tag.cond { background: var(--key-tint); color: var(--key); }
+.qa .tag.hyb { background: var(--warn-tint); color: var(--warn); }
+.qa p { margin: 0; }
+@media (max-width: 560px) { .qa { grid-template-columns: 1fr; } .qa .tag { justify-self: start; } }
+
+.code { margin: 16px 0 20px; border: 1px solid var(--line); border-radius: 10px; background: var(--code-bg); overflow: hidden; }
+.code .path { font-family: var(--mono); font-size: 12px; color: var(--muted); padding: 8px 14px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.code pre { margin: 0; padding: 12px 14px; overflow-x: auto; font-family: var(--mono); font-size: 13px; line-height: 1.7; }
+.code pre code { background: none; padding: 0; font-size: inherit; overflow-wrap: normal; }
+.code .c { color: var(--muted); }
+.code .hl { background: var(--hit-tint); display: inline-block; min-width: 100%; }
+.code .hw { background: var(--warn-tint); display: inline-block; min-width: 100%; }
+
+.figure { margin: 20px 0 8px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); padding: 16px; overflow-x: auto; }
+.figure svg { display: block; width: 100%; height: auto; min-width: 640px; }
+.caption { font-size: 13px; color: var(--muted); margin: 6px 0 20px; }
+.d-box { fill: var(--surface); stroke: var(--line); stroke-width: 1.5; }
+.d-key { fill: var(--key-tint); stroke: var(--key); stroke-width: 1.5; }
+.d-hit { fill: var(--hit-tint); stroke: var(--hit); stroke-width: 1.5; }
+.d-new { fill: var(--new-tint); stroke: var(--new); stroke-width: 1.5; }
+.d-free { fill: var(--free); stroke: var(--line); stroke-width: 1.5; stroke-dasharray: 4 3; }
+.d-t { fill: var(--ink); font: 600 12px var(--mono); }
+.d-s { fill: var(--muted); font: 11px var(--mono); }
+.d-zh { fill: var(--ink); font: 700 13px var(--sans); }
+.d-note { fill: var(--muted); font: 500 11px var(--sans); }
+.d-line { stroke: var(--muted); stroke-width: 1.5; fill: none; }
+.d-line.k { stroke: var(--key); }
+.d-line.w { stroke: var(--warn); }
+.f-k { fill: var(--key); } .f-m { fill: var(--muted); } .f-w { fill: var(--warn); } .f-h { fill: var(--hit); } .f-n { fill: var(--new); }
+
+.lab { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); padding: 16px; margin: 20px 0 8px; }
+.seg { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.seg button { font: 500 13px var(--sans); color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 5px 12px; cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+.scn-desc { font-size: 14px; color: var(--muted); margin-bottom: 12px; min-height: 3.2em; }
+.turns { display: grid; gap: 10px; }
+.turn { display: grid; grid-template-columns: 52px minmax(0, 1fr) 132px; gap: 10px; align-items: center; font-size: 13px; }
+.turn .lbl { color: var(--muted); }
+.track { position: relative; height: 26px; }
+.bar { position: absolute; top: 0; bottom: 0; left: 0; display: flex; border-radius: 4px; overflow: hidden; }
+.bar i { display: block; height: 100%; }
+.bar .h { background: var(--hit); }
+.bar .n { background: var(--new); }
+.bar .o { background: repeating-linear-gradient(135deg, var(--line) 0 4px, var(--surface) 4px 8px); }
+.tick { position: absolute; top: -4px; bottom: -4px; width: 2px; background: var(--ink); }
+.turn .num { font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; text-align: right; }
+.turn .num b { color: var(--hit); font-weight: 600; }
+.turn .num span { color: var(--new); }
+.totals { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 14px; }
+.totals div { border-top: 1px solid var(--line); padding-top: 8px; }
+.totals b { display: block; font-family: var(--mono); font-size: 20px; font-variant-numeric: tabular-nums; }
+.totals span { font-size: 13px; color: var(--muted); }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12px; color: var(--muted); margin-top: 12px; }
+.legend i { display: inline-block; width: 12px; height: 10px; border-radius: 2px; vertical-align: -1px; margin-right: 5px; }
+@media (max-width: 560px) { .turn { grid-template-columns: 40px minmax(0, 1fr); } .turn .num { grid-column: 2; text-align: left; } }
+
+.controls { display: grid; grid-template-columns: 150px minmax(0, 1fr) 72px; gap: 8px 12px; align-items: center; font-size: 14px; margin-bottom: 8px; }
+.controls label { color: var(--muted); }
+.controls input[type=range] { width: 100%; accent-color: var(--hit); }
+.controls output { font-family: var(--mono); text-align: right; font-variant-numeric: tabular-nums; }
+@media (max-width: 560px) { .controls { grid-template-columns: 1fr 64px; } .controls label { grid-column: 1 / -1; } }
+.tokens { display: flex; flex-wrap: wrap; gap: 6px; margin: 14px 0 6px; }
+.blk { display: grid; gap: 1px; padding: 2px; border-radius: 4px; border: 1px solid var(--line); }
+.blk i { display: block; width: 8px; height: 14px; border-radius: 1px; }
+.blk i.h { background: var(--hit); }
+.blk i.r { background: var(--new-tint); outline: 1px solid var(--new); outline-offset: -1px; }
+.blk i.n { background: var(--new); }
+.blk.partial { border-style: dashed; }
+.calc-out { font-size: 14px; margin-top: 8px; }
+.calc-out b { font-family: var(--mono); }
+
+.table-wrap { overflow-x: auto; margin: 16px 0; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; line-height: 1.6; }
+th, td { text-align: left; vertical-align: top; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+tr:last-child td { border-bottom: 0; }
+th { font-weight: 700; font-size: 13px; color: var(--muted); background: var(--bg); }
+td code { white-space: nowrap; }
+.mark { font-weight: 700; white-space: nowrap; }
+.mark.y { color: var(--hit); }
+.mark.x { color: var(--warn); }
+.mark.p { color: var(--new); }
+.scen td:first-child { min-width: 180px; }
+.idx td:first-child { font-family: var(--mono); font-size: 12px; white-space: nowrap; }
+.res td { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.res td:first-child { font-family: var(--sans); }
+
+.list { padding-left: 1.2em; display: grid; gap: 10px; margin: 8px 0 16px; }
+.list li::marker { color: var(--muted); }
+.note { font-size: 14px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 16px; margin-top: 56px; }
+.aside { font-size: 14px; color: var(--muted); border-left: 3px solid var(--line); padding: 2px 0 2px 14px; margin: 12px 0 16px; }
+</style>
+
+<div class="page">
+  <nav class="toc" aria-label="目录">
+    <span class="eyebrow">目录</span>
+    <ol>
+      <li><a href="#answer">短答</a></li>
+      <li><a href="#stateless">每一轮都是新请求</a></li>
+      <li><a href="#off">关掉缓存时的代码路径</a></li>
+      <li><a href="#key">缓存的键：哈希链</a></li>
+      <li><a href="#lookup">查找：最长相同前缀</a></li>
+      <li><a href="#pool">写入、共享与驱逐</a></li>
+      <li><a href="#agent">Agent 场景清单</a></li>
+      <li><a href="#hybrid">Qwen3.5 的特殊规则</a></li>
+      <li><a href="#observe">怎么观察命中</a></li>
+      <li><a href="#tips">让 agent 多命中</a></li>
+      <li><a href="#index">代码索引</a></li>
+    </ol>
+  </nav>
+
+  <article>
+    <span class="eyebrow">vLLM 源码导读 · 第 3 讲</span>
+    <h1>前缀缓存：Agent 每次带着工具结果回来，整段上下文会重新 prefill 吗？</h1>
+    <p class="lede">本讲沿着一个 agent 循环，从 HTTP 请求一路追到 KV 块池，讲清前缀缓存（Automatic Prefix Caching）的键、查找、写入和驱逐，以及哪些情况命中、哪些不命中。文中标为「实测」的命中数字不是估算：它们来自在 CPU 上直接运行 vLLM 自己的 <code>KVCacheManager</code> 得到的结果。</p>
+
+    <section class="answer" id="answer" aria-label="短答">
+      <h2>短答</h2>
+      <div class="qa"><span class="tag off">关掉缓存</span><p><b>会，整段重新 prefill。</b>vLLM 的 OpenAI 接口不保存会话。每次工具结果回来，客户端都要把 system、工具定义、全部历史和新的工具结果整个发过来，引擎把它当成一个全新的请求，从第 0 个 token 开始全部重算。唯一的例外是纯注意力模型配置了 KV connector（如 <code>--kv-offloading-size</code> 的 CPU 卸载）；Qwen3.5 这类混合模型没有例外。</p></div>
+      <div class="qa"><span class="tag on">打开缓存</span><p>前缀缓存默认就是开的。新请求先在块池里找「从第 0 个 token 起、逐块完全相同」的最长前缀，命中的部分直接复用 KV，只 prefill 剩下的。实测一个 4 轮 agent 循环（block 16 的纯注意力配置），需要计算的 prompt token 从 2,619 个降到 843 个。</p></div>
+      <div class="qa"><span class="tag cond">命中条件</span><p>token id 逐个相同、以整块为单位、从开头连续；这些块还没被驱逐；cache_salt 和 LoRA 一致；请求落在同一个引擎实例上。任何一处不同，从那一块开始往后全部不命中。</p></div>
+      <div class="qa"><span class="tag hyb">Qwen3.5</span><p>命中以 528 个 token 为单位。默认配置只保证命中到上一轮 prompt 的末尾（向下取整到 528 的倍数），上一轮模型生成的回复会被重算。</p></div>
+    </section>
+
+    <h2 id="stateless">每一轮都是一个新请求</h2>
+    <p>先把 agent 循环在服务端长什么样说清楚。以 <code>/v1/chat/completions</code> 为例，一次工具调用往返是这样的：</p>
+    <ol class="list">
+      <li>客户端发送 <code>messages = [system, user]</code> 和 <code>tools</code>。服务端渲染聊天模板、分词，交给引擎；模型生成一个工具调用，请求结束。</li>
+      <li>客户端（agent 框架）在本地执行工具，拿到结果。这段时间服务端什么都不知道。</li>
+      <li>客户端发送 <code>messages = [system, user, assistant(tool_calls), tool(结果)]</code>，也就是<b>上一轮的全部内容再加上新的工具结果</b>。服务端重新渲染整个模板、重新分词，生成一个新的引擎请求。</li>
+    </ol>
+    <p>服务端这一侧没有「会话」：<code>OnlineRenderer</code> 每次都从 <code>request.messages</code> 从头渲染；对 HF 分词器，模板先渲染成<b>文本</b>，再重新分词；引擎收到的 <code>EngineCoreRequest</code> 携带完整的 <code>prompt_token_ids</code>，请求 ID 还会被追加随机后缀，所以永远是一个新的 <code>Request</code>。请求里的 <code>session_id</code> 字段（或 <code>X-Session-ID</code> 头）只用于给 KV 事件打标签，不保存任何状态，也不参与缓存的键。</p>
+    <p>还要区分两件事。<b>同一个请求内部</b>，decode 不会重新 prefill：调度器每一步把 <code>num_computed_tokens</code> 往前推，新 token 只算自己。<b>跨请求</b>时，唯一能记住上一轮 KV 的，就是 KV 块池里的前缀缓存。所以你问的问题，答案完全取决于前缀缓存。</p>
+
+    <h3>实测：一个 4 轮 agent 循环</h3>
+    <p>下面的数字来自 <code>tutorial/03-prefix-cache-sim.py</code>：它用 <code>tests/v1/core/test_prefix_caching.py</code> 里的辅助函数构造真实的 <code>KVCacheManager</code>（单个全注意力组，block_size = 16，400 个块），按调度器的方式驱动它：查找命中 → 为未命中部分分配并「prefill」→ 逐个 token decode → 请求结束释放。第 1 轮 prompt 是 300 个 token 的 system 与工具定义加 37 个 token 的用户消息，之后每一轮都在上一轮基础上追加模型输出和工具结果。</p>
+
+    <div class="lab">
+      <div class="seg" role="group" aria-label="场景" id="scn"></div>
+      <div class="scn-desc" id="scn-desc" aria-live="polite"></div>
+      <div class="turns" id="turns"></div>
+      <div class="totals">
+        <div><b id="tot-prefill">843</b><span>4 轮合计需要 prefill 的 token</span></div>
+        <div><b id="tot-hit">1,776</b><span>4 轮合计命中缓存的 token</span></div>
+        <div><b id="tot-rate">67.8%</b><span>prompt token 命中率</span></div>
+      </div>
+      <div class="legend">
+        <span><i style="background:var(--hit)"></i>命中缓存，直接复用 KV</span>
+        <span><i style="background:var(--new)"></i>需要 prefill</span>
+        <span><i style="background:repeating-linear-gradient(135deg,var(--line) 0 3px,var(--surface) 3px 6px)"></i>本轮生成的输出</span>
+        <span><i style="background:var(--ink);width:3px"></i>上一轮 prompt 的结尾</span>
+        <span>右侧数字：命中 / 要 prefill / prompt 长度</span>
+      </div>
+    </div>
+    <p class="caption">每一行是一轮请求，条形长度按 token 数等比例绘制。所有数字都是程序的实际输出。</p>
+    <p>看「正常（缓存开）」这一组：第 2 轮命中 368 个 token，比上一轮 prompt 的 337 还多 31 个。多出来的就是<b>上一轮模型生成的工具调用</b>：生成的 token 也会被哈希、被缓存（后面会讲）。上一轮输出 45 个 token，最后一个采样出来的 token 从没被送进模型，它的 KV 不存在；337 + 44 = 381 个 token 有 KV，向下取整到 16 的倍数就是 368。</p>
+
+    <h2 id="off">关掉前缀缓存时，代码里发生了什么</h2>
+    <p>前缀缓存默认开启：<code>CacheConfig.enable_prefix_caching</code> 默认为 <code>True</code>，命令行参数默认为 <code>None</code>，再由模型是否支持来决定（解码器模型和混合模型都支持）。用 <code>--no-enable-prefix-caching</code> 可以关掉。关掉后，沿着一个新请求看三处代码：</p>
+    <div class="code">
+      <div class="path">vllm/v1/engine/core.py（第 228–237 行）：只有开缓存或有 connector 时才计算块哈希</div>
+<pre><code>self.request_block_hasher: Callable[[Request], list[BlockHash]] | None = None
+<span class="hl">if vllm_config.cache_config.enable_prefix_caching or kv_connector is not None:</span>
+    caching_hash_fn = get_hash_fn_by_name(
+        vllm_config.cache_config.prefix_caching_hash_algo
+    )
+    init_none_hash(caching_hash_fn)
+
+    self.request_block_hasher = get_request_block_hasher(
+        hash_block_size, caching_hash_fn
+    )</code></pre>
+    </div>
+    <div class="code">
+      <div class="path">vllm/v1/core/kv_cache_coordinator.py（第 513–521 行）：关缓存时用的协调器，查找永远返回 0</div>
+<pre><code>def find_longest_cache_hit(
+    self,
+    block_hashes: list[BlockHash],
+    max_cache_hit_length: int,
+) -> tuple[tuple[list[KVCacheBlock], ...], int, int]:
+    blocks: tuple[list[KVCacheBlock], ...] = tuple(
+        [] for _ in range(self.num_single_type_manager)
+    )
+<span class="hw">    return blocks, 0, 0</span></code></pre>
+    </div>
+    <div class="code">
+      <div class="path">vllm/v1/core/sched/scheduler.py（第 1085–1089 行）：本步要送进模型的 token 数</div>
+<pre><code><span class="c"># Number of tokens to be scheduled.</span>
+<span class="c"># We use `request.num_tokens` instead of</span>
+<span class="c"># `request.num_prompt_tokens` to consider the resumed</span>
+<span class="c"># requests, which have output tokens.</span>
+<span class="hw">num_new_tokens = request.num_tokens - num_computed_tokens</span></code></pre>
+    </div>
+    <p>命中为 0，<code>num_computed_tokens</code> 就是 0，<code>num_new_tokens</code> 等于整个 prompt 的长度（超过 <code>max_num_batched_tokens</code> 时分成几步做 chunked prefill，但每个 token 都要算一遍）。单元测试 <code>test_basic_prefix_caching_disabled</code> 直接验证了这一点：关缓存后，一个与刚结束的请求共享前缀的新请求，命中数是 0，需要重新分配全部 4 个块。</p>
+    <p>代价随轮数快速增长：第 k 轮要重算前 k−1 轮积累的全部上下文，总 prefill 量约等于各轮 prompt 长度之和，大致随轮数平方增长。上面的 4 轮例子里是 2,619 对 843，3.1 倍；轮数越多、工具结果越长，差距越大。请求被抢占时也一样：抢占会释放块并把 <code>num_computed_tokens</code> 归零，关缓存时恢复就意味着把 prompt 和已生成的输出全部重算。</p>
+    <p class="aside">例外：配置了 KV connector 时，即使关掉前缀缓存，引擎仍会计算块哈希，调度器仍会问 connector「你那里有多少」。对纯注意力模型，<code>OffloadingConnector</code>（<code>--kv-offloading-size</code>）确实能把上一轮的 prompt 从 CPU 加载回来；它默认只卸载 prompt（<code>offload_prompt_only=True</code>），上一轮的回复仍要重算。对 Qwen3.5 这样的混合模型，关缓存会把 GDN 的缓存模式强制设为 <code>none</code>，此时 <code>OffloadingConnector</code> 在启动时就会断言失败，<code>SimpleCPUOffloadConnector</code> 会自行关闭，没有任何 connector 能恢复 GDN 状态，每一轮都是完整重算。</p>
+
+    <h2 id="key">缓存的键：块哈希链</h2>
+    <p>vLLM 把每个请求的 token 序列切成固定大小的块（纯注意力模型默认 16 个 token 一块），每个<b>满块</b>算一个哈希。关键在于哈希的输入包含<b>上一块的哈希</b>：</p>
+    <div class="code">
+      <div class="path">vllm/v1/core/kv_cache_utils.py · hash_block_tokens（第 674–680 行）</div>
+<pre><code>if not parent_block_hash:
+    parent_block_hash = NONE_HASH
+
+curr_block_token_ids_tuple = tuple(curr_block_token_ids)
+return BlockHash(
+<span class="hl">    hash_function((parent_block_hash, curr_block_token_ids_tuple, extra_keys))</span>
+)</code></pre>
+    </div>
+
+    <div class="figure" role="img" aria-label="块哈希链：每块的哈希由上一块哈希、本块 token 和额外键共同算出；第 0 块的父哈希是种子 NONE_HASH。第 2 块里一个 token 改变后，第 2 块和之后所有块的哈希都变了。">
+      <svg viewBox="0 0 760 250" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" class="f-k"/></marker>
+        </defs>
+        <rect x="12" y="30" width="96" height="40" rx="8" class="d-key"/>
+        <text x="60" y="55" text-anchor="middle" class="d-t f-k">NONE_HASH</text>
+        <g>
+          <rect x="140" y="30" width="130" height="40" rx="8" class="d-box"/>
+          <text x="205" y="48" text-anchor="middle" class="d-t">块 0：t0…t15</text>
+          <text x="205" y="63" text-anchor="middle" class="d-s">+ cache_salt</text>
+          <rect x="140" y="84" width="130" height="30" rx="6" class="d-key"/>
+          <text x="205" y="104" text-anchor="middle" class="d-t f-k">h0</text>
+          <rect x="300" y="30" width="130" height="40" rx="8" class="d-box"/>
+          <text x="365" y="55" text-anchor="middle" class="d-t">块 1：t16…t31</text>
+          <rect x="300" y="84" width="130" height="30" rx="6" class="d-key"/>
+          <text x="365" y="104" text-anchor="middle" class="d-t f-k">h1 = H(h0, 块1)</text>
+          <rect x="460" y="30" width="130" height="40" rx="8" class="d-box"/>
+          <text x="525" y="55" text-anchor="middle" class="d-t">块 2：t32…t47</text>
+          <rect x="460" y="84" width="130" height="30" rx="6" class="d-key"/>
+          <text x="525" y="104" text-anchor="middle" class="d-t f-k">h2 = H(h1, 块2)</text>
+          <rect x="620" y="30" width="128" height="40" rx="8" class="d-free"/>
+          <text x="684" y="48" text-anchor="middle" class="d-t">t48…t52</text>
+          <text x="684" y="63" text-anchor="middle" class="d-s">不满一块，无哈希</text>
+        </g>
+        <path d="M108,99 H138" class="d-line k" marker-end="url(#ah)"/>
+        <path d="M270,99 H298" class="d-line k" marker-end="url(#ah)"/>
+        <path d="M430,99 H458" class="d-line k" marker-end="url(#ah)"/>
+        <path d="M205,70 V82" class="d-line" />
+        <path d="M365,70 V82" class="d-line" />
+        <path d="M525,70 V82" class="d-line" />
+
+        <text x="12" y="160" class="d-zh">另一个请求只在 t40 处不同：</text>
+        <rect x="140" y="176" width="130" height="30" rx="6" class="d-hit"/>
+        <text x="205" y="196" text-anchor="middle" class="d-t f-h">h0 相同 → 命中</text>
+        <rect x="300" y="176" width="130" height="30" rx="6" class="d-hit"/>
+        <text x="365" y="196" text-anchor="middle" class="d-t f-h">h1 相同 → 命中</text>
+        <rect x="460" y="176" width="130" height="30" rx="6" class="d-new"/>
+        <text x="525" y="196" text-anchor="middle" class="d-t f-n">h2′ ≠ h2 → 不命中</text>
+        <rect x="620" y="176" width="128" height="30" rx="6" class="d-new"/>
+        <text x="684" y="196" text-anchor="middle" class="d-t f-n">之后全部不命中</text>
+        <text x="12" y="234" class="d-note">一块的哈希代表「从开头到这一块末尾的整个前缀」，所以只要前面任何一个 token 不同，后面的块即使内容一样也不会命中。</text>
+      </svg>
+    </div>
+    <p>除了 token id，哈希还会混入一些<b>额外键</b>，让 token 相同但 KV 不同的块彼此区分：</p>
+    <div class="code">
+      <div class="path">vllm/v1/core/kv_cache_utils.py · generate_block_hash_extra_keys（第 628–647 行）</div>
+<pre><code>mm_extra_keys, new_start_mm_idx = _gen_mm_extra_hash_keys(
+    request, start_token_idx, end_token_idx, start_mm_idx
+)
+lora_extra_keys: list[str] = _gen_lora_extra_hash_keys(request)
+<span class="hl">cache_salt_keys: list[str] = (</span>
+<span class="hl">    [request.cache_salt] if (start_token_idx == 0 and request.cache_salt) else []</span>
+<span class="hl">)</span>
+prompt_embeds_keys = _gen_prompt_embeds_extra_hash_keys(
+    request, start_token_idx, end_token_idx
+)
+
+extra_keys: list[Any] = (
+    lora_extra_keys + mm_extra_keys + cache_salt_keys + prompt_embeds_keys
+)</code></pre>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>额外键</th><th>加在哪些块上</th><th>对 agent 的意义</th></tr></thead>
+        <tbody>
+          <tr><td><code>cache_salt</code></td><td>只加在第 0 块；通过哈希链传给后面所有块</td><td>同一会话的每一轮必须带同一个 salt（或都不带），否则从第 0 块就不命中。用来隔离租户。</td></tr>
+          <tr><td>LoRA 名称</td><td>每一块</td><td>中途换 adapter，整段不命中。</td></tr>
+          <tr><td>多模态内容哈希 + 块内偏移</td><td>与图片等占位 token 重叠的块</td><td>同一张图片再次出现在历史里，内容哈希相同，可以命中。</td></tr>
+          <tr><td>prompt embeds 的 SHA-256</td><td>对应的块</td><td>直接传 embedding 时，用它区分内容。</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>几个容易误会的细节：</p>
+    <ul class="list">
+      <li><b>哈希链的起点</b> <code>NONE_HASH</code>：默认算法 <code>sha256</code>（以及 <code>sha256_cbor</code>）用固定种子 <code>"vllm-none-hash"</code>，所以不同进程、重启前后、不同 DP 引擎对相同内容算出相同哈希；选 <code>xxhash</code> 时种子是每个进程随机的（除非设了 <code>PYTHONHASHSEED</code>），跨实例不一致。算法由 <code>--prefix-caching-hash-algo</code> 选择。</li>
+      <li><b>只有满块才有哈希</b>。最后不满一块的那几个 token 没有键，不可能被别的请求命中。</li>
+      <li><b>生成的 token 也会被哈希</b>。每次 <code>append_output_token_ids</code> 之后都会调用 <code>update_block_hashes</code>，新凑满的块立刻得到哈希。所以上一轮的回复（比如工具调用的 JSON）可以被下一轮复用，前提是下一轮重新渲染、重新分词后得到<b>完全相同的 token id</b>。</li>
+      <li><code>session_id</code> 不参与哈希。不同会话发同样的 prompt，照样共享缓存。</li>
+    </ul>
+    <div class="code">
+      <div class="path">vllm/v1/request.py（第 272–288 行，节选）：输出 token 追加后立即补算新满块的哈希</div>
+<pre><code>def append_output_token_ids(self, token_ids: int | list[int]) -> None:
+    if isinstance(token_ids, int):
+        self._output_token_ids.append(token_ids)
+        self._all_token_ids.append(token_ids)
+    else:
+        self._output_token_ids.extend(token_ids)
+        self._all_token_ids.extend(token_ids)
+
+<span class="hl">    self.update_block_hashes()</span>
+
+def update_block_hashes(self) -> None:
+    """Compute block hashes for any new full blocks and append them."""
+    if self._block_hasher is not None:
+        self.block_hashes.extend(self._block_hasher(self))</code></pre>
+    </div>
+
+    <h2 id="lookup">查找：从第 0 块开始，遇到第一个不同就停</h2>
+    <p>调度器只对 <code>num_computed_tokens == 0</code> 的等待请求做一次查找，也就是新请求或被抢占后重新排队的请求；正在运行的请求不会再去找新的命中。查找入口是 <code>KVCacheManager.get_computed_blocks</code>：</p>
+    <div class="code">
+      <div class="path">vllm/v1/core/kv_cache_manager.py（第 282–300 行，节选）</div>
+<pre><code><span class="c"># We skip finding the prefix cache hit when prefix caching is</span>
+<span class="c"># disabled or the request is marked as skipping kv cache read</span>
+<span class="c"># (which happens when the request requires prompt logprobs</span>
+<span class="c"># or calls a pooling model with all pooling).</span>
+if not self.prefix_cache_lookup_enabled(request):
+    return self.empty_kv_cache_blocks, 0, 0
+
+<span class="c"># NOTE: When all tokens hit the cache, we must recompute the last token</span>
+<span class="c"># to obtain logits. Thus, set max_cache_hit_length to prompt_length - 1.</span>
+...
+<span class="hl">max_cache_hit_length = request.num_tokens - 1</span>
+computed_blocks, num_new_computed_tokens, num_uncached = (
+    self.coordinator.find_longest_cache_hit(
+        request.block_hashes, max_cache_hit_length
+    )
+)</code></pre>
+    </div>
+    <p>对全注意力层，<code>find_longest_cache_hit</code> 就是一个从左到右的循环：逐块查哈希表，查不到就停（哈希是链式的，后面一定也查不到），命中长度 = 命中块数 × block_size：</p>
+    <div class="code">
+      <div class="path">vllm/v1/core/single_type_kv_cache_manager.py · FullAttentionManager（第 794–802 行）</div>
+<pre><code><span class="c"># Phase 1: longest run of cached full blocks from the start. A missing</span>
+<span class="c"># block implies every later block misses too (chained hashes).</span>
+for block_hash in itertools.islice(full_block_hashes, max_length // block_size):
+    cached_block = block_pool.get_cached_block(block_hash, kv_cache_group_ids)
+<span class="hl">    if not cached_block:</span>
+<span class="hl">        break</span>
+    for computed, cached in zip(computed_blocks, cached_block):
+        computed.append(cached)
+hit_length = len(computed_blocks[0]) * block_size</code></pre>
+    </div>
+    <p>于是命中长度有一个简单的公式。设新 prompt 长 L 个 token，前 d 个 token 与缓存中的某个序列完全相同，块大小为 B：</p>
+    <p style="text-align:center;font-family:var(--mono)">命中 = ⌊ min(d, L − 1) ÷ B ⌋ × B</p>
+    <p>两个「向下取整」都会让你损失一些 token：第一个分歧点所在的那一块，以及「最后一个 token 必须重算以产生 logits」导致的那一块。拖动下面的滑块看看：</p>
+    <div class="lab">
+      <div class="controls"><label for="cL">新 prompt 长度 L</label><input type="range" id="cL" min="1" max="96" value="49"><output id="cL-o" for="cL">49</output></div>
+      <div class="controls"><label for="cD">相同的前缀长度 d</label><input type="range" id="cD" min="0" max="96" value="49"><output id="cD-o" for="cD">49</output></div>
+      <div class="controls"><label for="cB">块大小 B</label><input type="range" id="cB" min="0" max="2" step="1" value="2"><output id="cB-o" for="cB">16</output></div>
+      <div class="tokens" id="tokens" aria-hidden="true"></div>
+      <div class="calc-out" id="calc-out" aria-live="polite"></div>
+      <div class="legend">
+        <span><i style="background:var(--hit)"></i>命中</span>
+        <span><i style="background:var(--new-tint);outline:1px solid var(--new)"></i>内容相同但仍要重算</span>
+        <span><i style="background:var(--new)"></i>新内容，必须计算</span>
+        <span>虚线框：不满一块</span>
+      </div>
+    </div>
+    <p>模拟程序的实测结果与公式一致（B = 16）：</p>
+    <div class="table-wrap">
+      <table class="res">
+        <thead><tr><th>场景</th><th>prompt</th><th>命中</th><th>要算</th></tr></thead>
+        <tbody>
+          <tr><td>64 个 token 原样重发</td><td>64</td><td>48</td><td>16</td></tr>
+          <tr><td>重发再多 1 个 token</td><td>65</td><td>64</td><td>1</td></tr>
+          <tr><td>47 个 token 原样重发</td><td>47</td><td>32</td><td>15</td></tr>
+          <tr><td>48 个 token 原样重发</td><td>48</td><td>32</td><td>16</td></tr>
+          <tr><td>49 个 token 原样重发</td><td>49</td><td>48</td><td>1</td></tr>
+          <tr><td>49 个 token，前 40 个相同</td><td>49</td><td>32</td><td>17</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>命中之后，调度器把 <code>num_computed_tokens</code> 设为命中长度，只调度剩下的 <code>num_tokens − num_computed_tokens</code> 个 token；model runner 给这些 token 的位置从 <code>num_computed_tokens</code> 开始编号，所以命中的 token 不会再进模型，它们的 KV 只通过块表被注意力读取。这也和第 1 讲呼应：cache 里存的是 RoPE 之后的 K，同一前缀出现在同样的位置，K 完全一样，直接可用。</p>
+    <p class="aside">有两个请求级开关会让查找直接跳过：设置了 <code>prompt_logprobs</code>（需要每个 prompt token 的 logprob，必须全部重算），以及 Chat Completions 的 <code>echo=True</code>（它会把 <code>prompt_logprobs</code> 默认设成 <code>top_logprobs</code>，即 0）。这类请求不读缓存，但仍然会把自己的块写进缓存。</p>
+
+    <h2 id="pool">写入、共享与驱逐：块池里发生了什么</h2>
+    <p>块池（<code>BlockPool</code>）启动时就创建了所有块。每块有一个引用计数 <code>ref_cnt</code>，空闲块串在一个双向链表 <code>free_block_queue</code> 里；另有一张哈希表 <code>cached_block_hash_to_block</code>，键是「块哈希 + KV cache 组号」。</p>
+    <h3>写入：每一步调度时就登记</h3>
+    <p>新请求命中后，<code>allocate_slots</code> 先 <b>touch</b> 命中的块：引用计数加 1，若它在空闲队列里就把它摘出来，防止被驱逐。然后从空闲队列<b>队头</b>取新块给未命中的部分，最后把已经填满的块登记进哈希表：</p>
+    <div class="code">
+      <div class="path">vllm/v1/core/kv_cache_manager.py · allocate_slots（第 597–606 行）</div>
+<pre><code><span class="c"># NOTE(woosuk): We want to commit (cache) up to num_local_computed_tokens</span>
+<span class="c"># + num_external_computed_tokens + num_new_tokens, but must exclude</span>
+<span class="c"># "non-committable" tokens (e.g., draft tokens that could be rejected).</span>
+<span class="c"># Therefore, we cap the number at `request.num_tokens`, ensuring only</span>
+<span class="c"># "finalized" tokens are cached.</span>
+num_tokens_to_cache = min(
+    total_computed_tokens + num_new_tokens,
+    request.num_tokens,
+)
+<span class="hl">self.coordinator.cache_blocks(request, num_tokens_to_cache)</span></code></pre>
+    </div>
+    <p>这段代码在 prefill 和每一步 decode 时都会执行，所以：</p>
+    <ul class="list">
+      <li>块在<b>调度时</b>就进了哈希表，不必等请求结束。几个同时运行、共享 system 与工具定义的子 agent，可以立刻共用同一批物理块（<code>ref_cnt</code> 变成 2、3…）。对全注意力层这是安全的：同一次前向里，每一层都是先写 KV 再算注意力。</li>
+      <li>decode 填满的块同样会被登记，这就是上一轮回复能被下一轮命中的原因。</li>
+      <li>最后一个采样出来的 token 从没被送进模型，它所在的块不会被这一轮登记。</li>
+    </ul>
+    <h3>释放：请求结束后 KV 还在</h3>
+    <div class="code">
+      <div class="path">vllm/v1/core/block_pool.py · free_blocks（第 793–805 行）</div>
+<pre><code>block.ref_cnt -= 1
+if block.ref_cnt == 0 and not block.is_null:
+    if block.block_hash is None or not self.enable_caching:
+        <span class="c"># LIFO reuse of non-cached blocks for better GPU locality.</span>
+        blocks_to_evict_first.append(block)
+    else:
+        <span class="c"># FIFO reuse of cached blocks for LRU eviction behavior.</span>
+        blocks_to_evict_last.append(block)
+
+<span class="c"># Blocks to reuse first are prepended to the front of the free queue.</span>
+self.free_block_queue.prepend_n(blocks_to_evict_first)
+<span class="c"># Blocks to reuse last are appended to the end of the free queue.</span>
+<span class="hl">self.free_block_queue.append_n(blocks_to_evict_last)</span></code></pre>
+    </div>
+    <p>请求结束时，块按<b>逆序</b>释放（最后一块先释放）。有哈希的块被放到空闲队列<b>队尾</b>，并且<b>保留哈希</b>：它们既是「空闲」的，又仍然可以被命中。没有哈希的块（不满一块的尾巴，或关缓存时的所有块）被放到<b>队头</b>，最先被重用。</p>
+    <div class="figure" role="img" aria-label="空闲队列：队头是没有哈希的块和最久未用的缓存块，最先被取走并驱逐；队尾是刚结束请求的缓存块，按逆序排列，前缀越靠前的块越靠近队尾、越晚被驱逐。">
+      <svg viewBox="0 0 760 170" xmlns="http://www.w3.org/2000/svg">
+        <text x="12" y="22" class="d-zh">free_block_queue</text>
+        <text x="12" y="58" class="d-note">队头</text>
+        <text x="12" y="74" class="d-note">先被取走</text>
+        <rect x="80" y="40" width="70" height="40" rx="6" class="d-free"/>
+        <text x="115" y="58" text-anchor="middle" class="d-t">尾巴</text>
+        <text x="115" y="72" text-anchor="middle" class="d-s">无哈希</text>
+        <rect x="160" y="40" width="70" height="40" rx="6" class="d-box"/>
+        <text x="195" y="65" text-anchor="middle" class="d-s">旧请求…</text>
+        <rect x="240" y="40" width="70" height="40" rx="6" class="d-box"/>
+        <text x="275" y="65" text-anchor="middle" class="d-s">旧请求…</text>
+        <rect x="330" y="40" width="80" height="40" rx="6" class="d-hit"/>
+        <text x="370" y="58" text-anchor="middle" class="d-t f-h">第 22 块</text>
+        <text x="370" y="72" text-anchor="middle" class="d-s">回复末尾</text>
+        <rect x="420" y="40" width="80" height="40" rx="6" class="d-hit"/>
+        <text x="460" y="65" text-anchor="middle" class="d-t f-h">…</text>
+        <rect x="510" y="40" width="80" height="40" rx="6" class="d-hit"/>
+        <text x="550" y="58" text-anchor="middle" class="d-t f-h">第 1 块</text>
+        <text x="550" y="72" text-anchor="middle" class="d-s">system</text>
+        <rect x="600" y="40" width="80" height="40" rx="6" class="d-hit"/>
+        <text x="640" y="58" text-anchor="middle" class="d-t f-h">第 0 块</text>
+        <text x="640" y="72" text-anchor="middle" class="d-s">system</text>
+        <text x="694" y="58" class="d-note">队尾</text>
+        <text x="694" y="74" class="d-note">最后驱逐</text>
+        <path d="M330,100 H680" class="d-line" />
+        <text x="505" y="118" text-anchor="middle" class="d-note">刚结束的 agent 请求，逆序放入：越靠前的前缀越晚被驱逐</text>
+        <text x="80" y="118" class="d-note">get_new_blocks 从这里取；取到有哈希的块时才删掉它的哈希（驱逐）</text>
+        <text x="12" y="152" class="d-note">命中时 touch() 会把块从队列中间直接摘走（O(1)），所以「被复用」等于「最近被使用」，形成 LRU。</text>
+      </svg>
+    </div>
+    <p><b>驱逐是惰性的</b>：只有当 <code>get_new_blocks</code> 从队头取走一个有哈希的块分给别人时，才把它从哈希表删掉。没有过期时间，只有显存压力。这对 agent 很重要：工具执行期间（可能几秒到几分钟）服务端在服务别的请求，如果流量大、显存紧，你的上一轮可能被挤掉。模拟程序的「显存压力」场景把块池缩到 70 个块，每轮之间插入一个无关的大请求：第 2 轮命中从 368 降到 208，第 4 轮从 864 降到 0。</p>
+    <p>还有两点：监控里的 KV cache 使用率把「空闲但仍缓存着」的块算作空闲，使用率低不代表缓存被清空；vLLM 不去重相同内容的块，两个并发请求如果都在各自计算同一段新前缀，会各存一份。</p>
+    <p class="aside">官方设计文档 <code>docs/design/prefix_caching.md</code> 说「释放的块按逆序加到队尾」，那是早期行为；现在没有哈希的块会被放到队头。本讲以代码为准。</p>
+
+    <h2 id="agent">Agent 场景：哪些命中，哪些不命中</h2>
+    <p>把上面的规则落到 agent 循环里。默认前缀缓存开启，按纯注意力模型（如 Llama 类）讨论；混合模型见下一节。</p>
+    <div class="table-wrap">
+      <table class="scen">
+        <thead><tr><th>场景</th><th>结果</th><th>原因</th></tr></thead>
+        <tbody>
+          <tr><td>同一会话下一轮，工具结果追加在末尾</td><td><span class="mark y">命中</span></td><td>前缀不变；上一轮 prompt 和回复中已凑满的块都能复用（实测第 2 轮 368 / 510）。</td></tr>
+          <tr><td>多个并行子 agent 共享 system 和工具定义</td><td><span class="mark y">命中</span></td><td>块在调度时即被登记，同时运行的请求共用物理块。</td></tr>
+          <tr><td>请求被抢占后恢复</td><td><span class="mark y">通常命中</span></td><td>抢占释放的块带着哈希回到队尾，恢复时重新查找，没被驱逐的部分能命中。</td></tr>
+          <tr><td>历史里再次出现同一张图片</td><td><span class="mark y">命中</span></td><td>图片的内容哈希作为额外键，相同图片得到相同的键。</td></tr>
+          <tr><td>原样重发同一个请求</td><td><span class="mark p">大部分命中</span></td><td>最后一个 token 必须重算，可能因此损失一整块。</td></tr>
+          <tr><td>system prompt 里有时间、随机 ID</td><td><span class="mark x">几乎全不命中</span></td><td>变化出现在第 0 块，整条链都变。实测：第 5 个 token 每轮变化，4 轮命中全为 0；同样的变化放在第 299 个 token，每轮只能命中前 288 个。gpt-oss 的 Harmony 格式会注入当天日期（可用 <code>VLLM_SYSTEM_START_DATE</code> 固定）；vLLM 文档也提到 Claude Code 曾在 system prompt 里注入逐请求的哈希。</td></tr>
+          <tr><td>改了工具列表或工具描述</td><td><span class="mark x">几乎全不命中</span></td><td>多数模板把工具定义渲染在 prompt 开头附近（system 段或第一条用户消息里）。</td></tr>
+          <tr><td>客户端改写了历史</td><td><span class="mark x">从改写处起不命中</span></td><td>实测：第 3 轮删掉第 1 轮回复的前 20 个 token，命中从 544 降到 336（改动发生在第 337 个 token，向下取整到 336）。</td></tr>
+          <tr><td>模板丢弃旧的思考内容</td><td><span class="mark x">从丢弃处起不命中</span></td><td>见下面 Qwen3.5 模板的例子。</td></tr>
+          <tr><td>不同的 <code>cache_salt</code> 或 LoRA</td><td><span class="mark x">完全不命中</span></td><td>salt 混在第 0 块；LoRA 名称混在每一块。实测：salt A、B 各发一次后，再发 salt A 命中 336。</td></tr>
+          <tr><td>请求带 <code>prompt_logprobs</code> 或 chat 的 <code>echo=True</code></td><td><span class="mark x">不读缓存</span></td><td>这类请求跳过查找，但仍会写缓存。</td></tr>
+          <tr><td>工具执行太久、服务端很忙</td><td><span class="mark x">可能被驱逐</span></td><td>LRU，没有过期时间，只看显存压力。</td></tr>
+          <tr><td>多个 vLLM 实例或 DP 副本，下一轮落到别的实例</td><td><span class="mark x">不命中</span></td><td>每个引擎有独立的块池；内置 DP 负载均衡只看负载。可用 <code>X-data-parallel-rank</code> 头固定到某个 rank，或用读取 KV 事件的外部路由器（如 llm-d）做前缀感知路由。</td></tr>
+          <tr><td>上下文过长被从左边截断</td><td><span class="mark x">不命中</span></td><td>开头的 token 变了，整条链从第 0 块起失效。</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>「上一轮回复能不能被复用」取决于模板</h3>
+    <p>引擎只认 token id，而下一轮的 prompt 是服务端<b>重新渲染文本、重新分词</b>得到的，并不是把上一轮生成的 token id 原样拼上去。研究时我们用 Qwen3.5 的真实分词器和 vLLM 的真实消息处理代码做了逐 token 对比（没有 GPU，生成的 token 用文本的标准分词代替）：</p>
+    <ul class="list">
+      <li><b>同一个工具循环内</b>（中间没有新的用户提问）：只要客户端把 vLLM 返回的 <code>reasoning</code> 字段原样回传，下一轮 prompt 能逐 token 复现上一轮的 prompt 和生成内容，包括思考、工具调用 XML 和结尾的 <code>&lt;|im_end|&gt;</code>。</li>
+      <li><b>新的用户提问到来时</b>：Qwen3.5 的模板只给「最后一个真实用户提问之后」的 assistant 消息保留 <code>&lt;think&gt;</code>，更早的会被去掉。于是上一个工具循环的第一条 assistant 消息起就和缓存不一致，整个上一轮循环（包括工具结果）都要重算；更早的 system、工具定义和历史仍然命中。</li>
+      <li><b>容易出错的地方</b>：客户端没回传 <code>reasoning</code>（第一个生成 token 就对不上）；思考内容为空；工具参数是布尔值（生成的 <code>true</code> 被渲染回 <code>True</code>）；模型生成了紧凑 JSON 而模板的 <code>tojson</code> 加了空格。</li>
+    </ul>
+    <div class="code">
+      <div class="path">rust/src/chat/tests/templates/qwen35.jinja（第 100–104 行，与 HF 上 Qwen3.5 的模板一致）</div>
+<pre><code>{%- if loop.index0 > ns.last_query_index %}
+    {{- '&lt;|im_start|&gt;' + message.role + '\n&lt;think&gt;\n' + reasoning_content + '\n&lt;/think&gt;\n\n' + content }}
+<span class="hw">{%- else %}</span>
+<span class="hw">    {{- '&lt;|im_start|&gt;' + message.role + '\n' + content }}</span>
+{%- endif %}</code></pre>
+    </div>
+    <p class="aside">调试方法：请求里加 <code>return_prompt_text: true</code> 拿到服务端实际渲染的 prompt 文本，或用 <code>return_token_ids: true</code> 拿到 prompt 和输出的 token id，比较相邻两轮，第一个不同的位置就是缓存断开的位置。</p>
+
+    <h2 id="hybrid">Qwen3.5（混合模型）的特殊规则</h2>
+    <p>第 2 讲讲过：Qwen3.5-9B 的全注意力块和 GDN 状态块都是 528 个 token，一个物理块要么放注意力 KV，要么放一份 GDN 状态。前缀缓存对它有三条额外规则：</p>
+    <ol class="list">
+      <li><b>命中以 528 为单位。</b>所有 KV cache 组的块大小都是 528，哈希粒度（hash_block_size）也是 528，子块级的「部分命中」不生效。</li>
+      <li><b>命中长度取各组的最小值。</b>全注意力组需要前缀的全部块；GDN 组只需要命中边界处的<b>那一份</b>状态（它已经概括了之前的所有 token）。两者不一致时，以短的为准。</li>
+      <li><b>GDN 状态不是每块都有。</b>开前缀缓存时 GDN 使用 <code>align</code> 模式：状态只在某个调度步恰好结束在 528 的倍数处时才存在。再加上默认的 <code>prefix_cache_retention_interval = 0</code>，只保留两类检查点：prompt 末尾向下取整处（<code>⌊(P − 1) / 528⌋ × 528</code>）和共享前缀的分叉点。decode 过程中经过的 528 边界不保留。</li>
+    </ol>
+    <p>合起来，对 agent 循环的影响是：<b>下一轮最多命中到上一轮 prompt 的末尾（向下取整到 528）</b>。上一轮 prompt 末尾不足 528 的零头、上一轮的整个回复、新的工具结果都要重新 prefill。vLLM 自带的端到端测试 <code>test_hybrid_prefix_cache_hit_rate.py</code>（用 Qwen3.5-0.8B 跑多轮对话）断言的正是这个下限。</p>
+    <p>还有一个边界情况：如果上一轮 prompt 的长度恰好是 528 的倍数，并且一次 prefill 就算完了，那么 <code>P − 528</code> 处的状态从没被算出来，下一轮会退回到更早的检查点，最坏命中 0；再下一轮会通过分叉点检查点自动恢复。</p>
+    <p>可以调的两个参数：</p>
+    <ul class="list">
+      <li><code>--prefix-cache-retention-interval</code>：设为 <code>None</code>（保留全部检查点）或 528 的正整数倍 K，decode 时经过的边界也会被保留，下一轮就能命中到上一轮回复里面。代价是缓存的状态块变多：每个检查点位置 3 个 GDN 组各占一块，约 49.5 MiB。</li>
+      <li><code>--prefix-match-unit u</code>（u 整除 528 且小于 528）：在 prompt 末尾登记更细的「部分命中」入口，命中能精确到 u 个 token。代价是 prefill 多出一两个调度步（要在那些位置停下来存状态），命中时还要复制一次状态块。它不会让命中进入上一轮回复。</li>
+    </ul>
+    <p>并行子 agent 在混合模型上也有区别：第一个与已有请求只共享 system 前缀的兄弟请求命中为 0（GDN 没有那个位置的状态），但它会在分叉点停下来存一份状态；之后的兄弟请求就能命中到分叉点（向下取整到 528）。如果先用一个「只有共享前缀」的请求预热，所有兄弟都能直接命中。</p>
+    <div class="lab">
+      <div class="controls"><label for="qP">上一轮 prompt</label><input type="range" id="qP" min="200" max="32000" step="1" value="6000"><output id="qP-o" for="qP">6,000</output></div>
+      <div class="controls"><label for="qR">上一轮生成的回复</label><input type="range" id="qR" min="1" max="4000" step="1" value="400"><output id="qR-o" for="qR">400</output></div>
+      <div class="controls"><label for="qT">新的工具结果等</label><input type="range" id="qT" min="1" max="8000" step="1" value="1200"><output id="qT-o" for="qT">1,200</output></div>
+      <div class="table-wrap" style="margin-bottom:0">
+        <table class="res">
+          <thead><tr><th>配置</th><th>新 prompt</th><th>命中</th><th>要 prefill</th></tr></thead>
+          <tbody id="qtab"></tbody>
+        </table>
+      </div>
+      <p class="caption" id="qnote" style="margin:8px 0 0"></p>
+    </div>
+    <p class="caption">按当前代码的规则估算下一轮的命中，假设模板把上一轮回复原样渲染回来、相关块没有被驱逐。最后一行用于对照：同样长度的 block 16 纯注意力模型。</p>
+
+    <h2 id="observe">怎么观察命中</h2>
+    <ul class="list">
+      <li><b>每个请求</b>：启动时加 <code>--enable-prompt-tokens-details</code>，响应的 <code>usage.prompt_tokens_details</code> 里会有 <code>cached_tokens</code>（命中的 token 数，含 connector 的外部命中）和 <code>created_cache_tokens</code>。Anthropic 兼容接口 <code>/v1/messages</code> 对应 <code>cache_read_input_tokens</code> 和 <code>cache_creation_input_tokens</code>。agent 循环里可以看着 <code>cached_tokens</code> 每轮增长。</li>
+      <li><b>全局指标</b>：Prometheus 计数器 <code>vllm:prefix_cache_queries</code> 和 <code>vllm:prefix_cache_hits</code>（单位是 token；被抢占后重新进入的请求不计入；connector 的命中另计在 <code>vllm:external_prefix_cache_*</code>）。日志里定期打印 <code>Prefix cache hit rate</code>。因为最后一个 token 总要重算，原样重发也不会显示 100%。</li>
+      <li><b>压测</b>：<code>benchmarks/multi_turn/benchmark_serving_multi_turn.py</code> 会把模型的真实回答作为历史回放多轮对话，报告 TTFT、TPOT 等，可以对比开关缓存的差别。</li>
+      <li><b>清空缓存</b>：<code>POST /reset_prefix_cache</code>（或 <code>LLM.reset_prefix_cache()</code>），只有在没有块被占用时才会成功。</li>
+    </ul>
+
+    <h2 id="tips">写 agent 时怎样让缓存多命中</h2>
+    <ol class="list">
+      <li><b>稳定的放前面，变化的放后面。</b>system prompt 和工具定义不要包含时间、随机 ID、计数器；需要的话放到最后一条消息里。</li>
+      <li><b>历史只追加，不改写。</b>不要压缩、截断或重排旧消息；确实要压缩上下文时，接受那一轮会从改动处重算。</li>
+      <li><b>原样回传 vLLM 返回的字段</b>，尤其是 <code>reasoning</code> 和工具调用的参数，避免客户端自己重新格式化。</li>
+      <li><b>同一会话用同一个 <code>cache_salt</code></b>，也不要中途切换 LoRA。</li>
+      <li><b>agent 请求里不要开</b> <code>prompt_logprobs</code> 或 chat 的 <code>echo</code>。</li>
+      <li><b>多实例部署时做会话粘性路由</b>，让同一会话的每一轮落到同一个引擎。</li>
+      <li><b>显存紧张时</b>考虑 <code>--kv-offloading-size</code> 把冷块卸载到 CPU，扩大缓存容量（纯注意力模型；混合模型需在开前缀缓存的前提下使用）。</li>
+      <li><b>Qwen3.5 等混合模型</b>：如果上一轮回复很长、又希望复用，可以试 <code>--prefix-cache-retention-interval</code>，用显存换命中。</li>
+    </ol>
+
+    <h2 id="index">代码索引</h2>
+    <div class="table-wrap">
+      <table class="idx">
+        <thead><tr><th>位置</th><th>作用</th></tr></thead>
+        <tbody>
+          <tr><td>vllm/config/cache.py:142</td><td><code>enable_prefix_caching</code> 默认 True</td></tr>
+          <tr><td>vllm/config/cache.py:144</td><td><code>prefix_caching_hash_algo</code> 默认 sha256</td></tr>
+          <tr><td>vllm/config/cache.py:160</td><td><code>prefix_cache_retention_interval</code> 默认 0</td></tr>
+          <tr><td>vllm/engine/arg_utils.py:2950</td><td>未指定时按模型是否支持决定开关</td></tr>
+          <tr><td>vllm/renderers/online_renderer.py:719</td><td>非 Mistral 分词器：模板先渲染成文本再分词</td></tr>
+          <tr><td>vllm/v1/engine/core.py:228</td><td>只在开缓存或有 connector 时创建块哈希器</td></tr>
+          <tr><td>vllm/v1/core/kv_cache_utils.py:132</td><td><code>NONE_HASH</code> 种子的选择</td></tr>
+          <tr><td>vllm/v1/core/kv_cache_utils.py:628</td><td>额外键：LoRA、多模态、cache_salt、prompt embeds</td></tr>
+          <tr><td>vllm/v1/core/kv_cache_utils.py:674</td><td><code>hash_block_tokens</code>：链式哈希</td></tr>
+          <tr><td>vllm/v1/core/kv_cache_utils.py:863</td><td>只哈希满块</td></tr>
+          <tr><td>vllm/v1/request.py:272</td><td>输出 token 追加后补算哈希</td></tr>
+          <tr><td>vllm/v1/core/sched/scheduler.py:931</td><td>只对 <code>num_computed_tokens == 0</code> 的请求查找</td></tr>
+          <tr><td>vllm/v1/core/sched/scheduler.py:1089</td><td>本步要计算的 token 数</td></tr>
+          <tr><td>vllm/v1/core/sched/scheduler.py:1557</td><td>抢占：释放块并把 <code>num_computed_tokens</code> 归零</td></tr>
+          <tr><td>vllm/v1/core/kv_cache_manager.py:282</td><td><code>get_computed_blocks</code>：跳过条件与 <code>num_tokens - 1</code> 上限</td></tr>
+          <tr><td>vllm/v1/core/kv_cache_manager.py:597</td><td><code>allocate_slots</code> 中登记缓存</td></tr>
+          <tr><td>vllm/v1/core/kv_cache_coordinator.py:312</td><td>混合模型保留的检查点位置</td></tr>
+          <tr><td>vllm/v1/core/kv_cache_coordinator.py:513</td><td>关缓存时的协调器</td></tr>
+          <tr><td>vllm/v1/core/single_type_kv_cache_manager.py:794</td><td>全注意力：从左到右找最长命中</td></tr>
+          <tr><td>vllm/v1/core/block_pool.py:683</td><td>取新块时惰性驱逐</td></tr>
+          <tr><td>vllm/v1/core/block_pool.py:754</td><td><code>touch</code>：命中时摘出空闲队列</td></tr>
+          <tr><td>vllm/v1/core/block_pool.py:786</td><td>释放：有哈希放队尾，无哈希放队头</td></tr>
+          <tr><td>vllm/sampling_params.py:549</td><td><code>prompt_logprobs</code> 时跳过读缓存</td></tr>
+          <tr><td>tests/v1/core/test_prefix_caching.py:2701</td><td>关缓存后共享前缀也命中 0</td></tr>
+          <tr><td>tests/v1/core/prefix_cache/test_hybrid_prefix_cache_hit_rate.py</td><td>Qwen3.5 多轮命中下限的端到端测试</td></tr>
+          <tr><td>tutorial/03-prefix-cache-sim.py</td><td>本讲的模拟程序</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="note">基于本仓库 commit 1408693 编写，行号会随上游代码变化。模拟数据可以自己复现：在仓库根目录 <code>uv venv --python 3.12 .venv</code>，装 CPU 版 PyTorch，再 <code>VLLM_TARGET_DEVICE=empty uv pip install -e .</code> 安装不含 CUDA kernel 的 vLLM，然后运行 <code>.venv/bin/python tutorial/03-prefix-cache-sim.py</code>。研究时在同一环境下跑了 <code>tests/v1/core/test_prefix_caching.py</code> 的 160 个用例，全部通过。可以接着问的问题：chunked prefill 和前缀缓存怎样配合调度？KV cache 卸载到 CPU 的 OffloadingConnector 是怎么工作的？</p>
+  </article>
+</div>
+
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const fmt = (n) => n.toLocaleString('en-US');
+
+  // Agent loop scenarios: verbatim numbers from tutorial/03-prefix-cache-sim.py
+  const OUT = [45, 38, 52, 60];
+  const P = [337, 510, 816, 956];
+  const SCN = [
+    { id: 'on', name: '正常（缓存开）', prompts: P, hits: [0, 368, 544, 864],
+      desc: '默认配置。每一轮只需要 prefill 新追加的工具结果，以及上一轮回复中不满一块的尾巴。' },
+    { id: 'off', name: '缓存关', prompts: P, hits: [0, 0, 0, 0],
+      desc: 'KVCacheManager(enable_caching=False)。每一轮都从第 0 个 token 开始全部重算：4 轮合计 2,619 个 token，是缓存开时的 3.1 倍。' },
+    { id: 'rewrite', name: '改写历史', prompts: [337, 510, 796, 936], hits: [0, 368, 336, 832],
+      desc: '从第 3 轮起，客户端删掉了第 1 轮回复的前 20 个 token（类似模板丢弃旧的思考内容）。第一个变化在第 337 个 token，命中被截在 336。' },
+    { id: 'dyn5', name: 'system 开头有时间戳', prompts: P, hits: [0, 0, 0, 0],
+      desc: '第 5 个 token 每轮都不同（比如注入了当前时间）。它在第 0 块里，整条哈希链都变了，4 轮全部不命中。' },
+    { id: 'dyn299', name: '时间戳在 system 末尾', prompts: P, hits: [0, 288, 288, 288],
+      desc: '同样的变化放到第 299 个 token。前 288 个 token（18 整块）每轮都能命中，之后全部重算。' },
+    { id: 'evict', name: '显存压力', prompts: P, hits: [0, 208, 544, 0],
+      desc: '块池只有 70 个块，每两轮之间插入一个无关的大请求。上一轮的块被部分或全部驱逐：第 2 轮只剩 208，第 4 轮为 0。' },
+  ];
+  const MAXLEN = 956 + 60;
+  let cur = 'on';
+  const seg = $('scn');
+  SCN.forEach((s) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = s.name;
+    b.dataset.id = s.id;
+    b.setAttribute('aria-pressed', s.id === cur ? 'true' : 'false');
+    b.addEventListener('click', () => { cur = s.id; renderScn(); });
+    seg.appendChild(b);
+  });
+  function renderScn() {
+    const s = SCN.find((x) => x.id === cur);
+    seg.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', b.dataset.id === cur ? 'true' : 'false'));
+    $('scn-desc').textContent = s.desc;
+    const box = $('turns');
+    box.textContent = '';
+    let tp = 0, th = 0;
+    s.prompts.forEach((p, i) => {
+      const h = s.hits[i], n = p - h;
+      tp += n; th += h;
+      const row = document.createElement('div');
+      row.className = 'turn';
+      const pct = (v) => (100 * v / MAXLEN) + '%';
+      let tick = '';
+      if (i > 0) tick = '<span class="tick" style="left:' + pct(s.prompts[i - 1]) + '" title="上一轮 prompt 结尾"></span>';
+      row.innerHTML = '<span class="lbl">第 ' + (i + 1) + ' 轮</span>' +
+        '<div class="track"><div class="bar" style="width:' + pct(p + OUT[i]) + '">' +
+        '<i class="h" style="width:' + (100 * h / (p + OUT[i])) + '%"></i>' +
+        '<i class="n" style="width:' + (100 * n / (p + OUT[i])) + '%"></i>' +
+        '<i class="o" style="width:' + (100 * OUT[i] / (p + OUT[i])) + '%"></i>' +
+        '</div>' + tick + '</div>' +
+        '<span class="num"><b>' + fmt(h) + '</b> / <span>' + fmt(n) + '</span> / ' + fmt(p) + '</span>';
+      box.appendChild(row);
+    });
+    $('tot-prefill').textContent = fmt(tp);
+    $('tot-hit').textContent = fmt(th);
+    $('tot-rate').textContent = (100 * th / (tp + th)).toFixed(1) + '%';
+  }
+  renderScn();
+
+  // Hit calculator
+  const BS = [4, 8, 16];
+  const cL = $('cL'), cD = $('cD'), cB = $('cB');
+  function renderCalc() {
+    const L = +cL.value;
+    if (+cD.value > L) cD.value = L;
+    cD.max = L;
+    const d = +cD.value, B = BS[+cB.value];
+    $('cL-o').textContent = L; $('cD-o').textContent = d; $('cB-o').textContent = B;
+    const hit = Math.floor(Math.min(d, L - 1) / B) * B;
+    const box = $('tokens');
+    box.textContent = '';
+    for (let s = 0; s < L; s += B) {
+      const blk = document.createElement('span');
+      const e = Math.min(s + B, L);
+      blk.className = 'blk' + (e - s < B ? ' partial' : '');
+      blk.style.gridTemplateColumns = 'repeat(' + Math.min(B, 8) + ', 8px)';
+      for (let t = s; t < e; t++) {
+        const i = document.createElement('i');
+        i.className = t < hit ? 'h' : (t < d ? 'r' : 'n');
+        blk.appendChild(i);
+      }
+      box.appendChild(blk);
+    }
+    const why = [];
+    if (d >= L) why.push('完全相同，但最后 1 个 token 必须重算以产生 logits，上限变成 L − 1 = ' + (L - 1));
+    else why.push('前缀在第 ' + d + ' 个 token 处出现分歧');
+    $('calc-out').innerHTML = '命中 <b>' + hit + '</b> 个 token，需要计算 <b>' + (L - hit) + '</b> 个。' + why.join('；') + '，再向下取整到 ' + B + ' 的倍数。';
+  }
+  [cL, cD, cB].forEach((x) => x.addEventListener('input', renderCalc));
+  renderCalc();
+
+  // Qwen3.5 next-turn estimator
+  const QB = 528;
+  const qP = $('qP'), qR = $('qR'), qT = $('qT');
+  function renderQ() {
+    const p = +qP.value, r = +qR.value, t = +qT.value;
+    $('qP-o').textContent = fmt(p); $('qR-o').textContent = fmt(r); $('qT-o').textContent = fmt(t);
+    const N = p + r + t;
+    const cap = (h, b) => Math.min(h, Math.floor((N - 1) / b) * b);
+    const aligned = p % QB === 0;
+    const hDef = aligned ? 0 : cap(Math.floor((p - 1) / QB) * QB, QB);
+    const hDense = cap(Math.max(aligned ? p : hDef, Math.floor((p + r - 1) / QB) * QB), QB);
+    const hAttn = cap(Math.floor((p + r - 1) / 16) * 16, 16);
+    const rows = [
+      ['Qwen3.5 默认（retention 0）', hDef, aligned ? '（最坏）' : ''],
+      ['Qwen3.5，retention = None', hDense, ''],
+      ['Qwen3.5，关闭前缀缓存', 0, ''],
+      ['对照：block 16 纯注意力模型', hAttn, ''],
+    ];
+    $('qtab').innerHTML = rows.map(([name, h, mark]) =>
+      '<tr><td>' + name + '</td><td>' + fmt(N) + '</td><td>' + fmt(h) + mark + '</td><td>' + fmt(N - h) + '</td></tr>').join('');
+    $('qnote').textContent = aligned
+      ? '上一轮 prompt 恰好是 528 的倍数：默认配置下这一轮会退回到更早的检查点，最坏命中 0，下一轮自动恢复。'
+      : '默认配置下命中 = ⌊(P − 1) / 528⌋ × 528 = ' + fmt(hDef) + '，上一轮回复的 ' + fmt(r) + ' 个 token 全部重算。';
+  }
+  [qP, qR, qT].forEach((x) => x.addEventListener('input', renderQ));
+  renderQ();
+})();
+</script>
